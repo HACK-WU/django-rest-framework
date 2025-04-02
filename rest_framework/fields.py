@@ -491,53 +491,90 @@ class Field:
 
     def validate_empty_values(self, data):
         """
-        Validate empty values, and either:
+        验证数据空值状态并决定后续处理流程
 
-        * Raise `ValidationError`, indicating invalid data.
-        * Raise `SkipField`, indicating that the field should be ignored.
-        * Return (True, data), indicating an empty value that should be
-          returned without any further validation being applied.
-        * Return (False, data), indicating a non-empty value, that should
-          have validation applied as normal.
+        Args:
+            data: 待验证的输入数据
+
+        Returns:
+            tuple: (是否为空值标志, 处理后数据) 
+            返回值可能情况:
+            - (True, default_value): 空值且使用默认值，跳过后续验证
+            - (False, original_data): 非空值需继续验证
+            可能抛出异常:
+            - ValidationError: 数据不符合必填或空值规则时抛出
+            - SkipField: 在部分更新模式下遇到空值时抛出
+
+        处理逻辑分支:
+        1. 只读字段直接返回默认值
+        2. 处理空值数据（data is empty的特殊标记情况）
+        3. 处理显式传入的None值
+        4. 常规非空数据处理
         """
+        # 处理只读字段逻辑：直接返回默认值，无需后续验证
         if self.read_only:
             return (True, self.get_default())
 
+        # 处理特殊空值标记情况（data为empty对象）
         if data is empty:
+            # 部分更新模式下主动跳过字段验证
             if getattr(self.root, 'partial', False):
                 raise SkipField()
+            # 必填字段缺失时触发验证错误
             if self.required:
                 self.fail('required')
+            # 非必填字段返回默认值
             return (True, self.get_default())
 
+        # 处理显式传入的None值
         if data is None:
+            # 检查是否允许空值
             if not self.allow_null:
                 self.fail('null')
-            # Nullable `source='*'` fields should not be skipped when its named
-            # field is given a null value. This is because `source='*'` means
-            # the field is passed the entire object, which is not null.
+            # 特殊字段(source='*')即使收到None仍需继续验证
             elif self.source == '*':
                 return (False, None)
+            # 普通字段收到允许的None值时跳过后续验证
             return (True, None)
 
+        # 常规数据：返回原始数据继续后续验证流程
         return (False, data)
+
 
     def run_validation(self, data=empty):
         """
-        Validate a simple representation and return the internal value.
+        执行字段级别的数据验证和转换
 
-        The provided data may be `empty` if no representation was included
-        in the input.
+        Args:
+            data: 原始输入数据，可以是任意类型。当输入中不包含该字段时，
+                  默认为特殊标记值`empty`（截至2023年12月DRF最新实现）
 
-        May raise `SkipField` if the field should not be included in the
-        validated data.
+        Returns:
+            any: 经过验证和转换的内部表示值。可能返回以下情况：
+                - 空值标记（当字段允许为空时）
+                - 转换后的数据类型（如将字符串转换为日期对象）
+                - 原始数据（当通过所有验证时）
+
+        Raises:
+            ValidationError: 当数据验证失败时抛出
+            SkipField: 当需要跳过该字段的验证结果时抛出
         """
+        # 检查空值并执行空值处理逻辑
+        # 返回元组：(是否空值标记, 处理后的空值数据)
         (is_empty_value, data) = self.validate_empty_values(data)
+        
+        # 如果是空值且允许为空，直接返回处理后的空值标记
         if is_empty_value:
             return data
+        
+        # 将原始数据转换为内部表示形式（如字符串转日期对象）
         value = self.to_internal_value(data)
+        
+        # 执行所有注册的字段验证器（包括自定义验证器）
         self.run_validators(value)
+        
         return value
+
 
     def run_validators(self, value):
         """

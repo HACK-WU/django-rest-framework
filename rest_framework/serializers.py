@@ -88,28 +88,35 @@ ALL_FIELDS = '__all__'
 
 class BaseSerializer(Field):
     """
-    The BaseSerializer class provides a minimal class which may be used
-    for writing custom serializer implementations.
+    BaseSerializer 类提供了一个最小化的基类，可用于编写自定义序列化器实现
 
-    Note that we strongly restrict the ordering of operations/properties
-    that may be used on the serializer in order to enforce correct usage.
+    注意：该类严格限制操作/属性的使用顺序，以确保正确的使用方式
 
-    In particular, if a `data=` argument is passed then:
+    参数说明：
+        data  : 可选参数，当传入数据时进入'数据反序列化模式'，否则进入'序列化模式'
+        context : 可选上下文字典，可用于传递额外数据到序列化器
+        instance : 可选对象实例，用于序列化模式下的对象表示
+        many : 布尔值，标识是否处理多个对象（原始代码未完整可能需要实际参数列表）
 
-    .is_valid() - Available.
-    .initial_data - Available.
-    .validated_data - Only available after calling `is_valid()`
-    .errors - Only available after calling `is_valid()`
-    .data - Only available after calling `is_valid()`
+    方法及属性可用性规则：
+    当传入 data 参数时：
+        - is_valid()       可用
+        - initial_data     可用
+        - validated_data   仅在调用 is_valid() 后可用
+        - errors           仅在调用 is_valid() 后可用
+        - data             仅在调用 is_valid() 后可用
 
-    If a `data=` argument is not passed then:
+    当未传入 data 参数时（序列化模式）：
+        - is_valid()       不可用
+        - initial_data     不可用
+        - validated_data   不可用
+        - errors           不可用
+        - data             直接可用（用于获取序列化后的数据表示）
 
-    .is_valid() - Not available.
-    .initial_data - Not available.
-    .validated_data - Not available.
-    .errors - Not available.
-    .data - Available.
+    返回值：
+        无，作为基类需要子类实现具体逻辑
     """
+
 
     def __init__(self, instance=None, data=empty, **kwargs):
         self.instance = instance
