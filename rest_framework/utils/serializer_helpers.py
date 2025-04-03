@@ -151,11 +151,18 @@ class NestedBoundField(BoundField):
 
 class BindingDict(MutableMapping):
     """
-    This dict-like object is used to store fields on a serializer.
+    用于序列化器字段存储的特殊字典结构，继承自MutableMapping
+    在添加字段时会自动调用字段的bind()方法，确保字段能正确获取字段名和所属序列化器引用
 
-    This ensures that whenever fields are added to the serializer we call
-    `field.bind()` so that the `field_name` and `parent` attributes
-    can be set correctly.
+    例如：
+        book_name = serializers.CharField(source='name')
+        此时 book_name 的源字段为 'name'，这里就是将book_name绑定到name上。
+        当获取model的book_name时，会自动通过name去获取实际值。
+
+    Attributes:
+        serializer: 关联的父序列化器实例
+        fields: 实际存储字段的字典容器
+
     """
 
     def __init__(self, serializer):

@@ -141,33 +141,49 @@ class BaseSerializer(Field):
     @classmethod
     def many_init(cls, *args, **kwargs):
         """
-        This method implements the creation of a `ListSerializer` parent
-        class when `many=True` is used. You can customize it if you need to
-        control which keyword arguments are passed to the parent, and
-        which are passed to the child.
+        类方法，用于在创建`many=True`的列表序列化器时初始化父类`ListSerializer`
 
-        Note that we're over-cautious in passing most arguments to both parent
-        and child classes in order to try to cover the general case. If you're
-        overriding this method you'll probably want something much simpler, eg:
+        Args:
+            cls (Serializer): 当前序列化器类，将作为子序列化器使用
+            *args: 可变位置参数，将传递给子序列化器和父列表序列化器
+            **kwargs: 可变关键字参数，需要分离出父类和子类的参数
 
-        @classmethod
-        def many_init(cls, *args, **kwargs):
-            kwargs['child'] = cls()
-            return CustomListSerializer(*args, **kwargs)
+        Returns:
+            ListSerializer: 实例化的列表序列化器对象或其子类对象
+
+        实现说明:
+            1. 分离出需要传递给父列表序列化器的参数
+            2. 创建子序列化器实例
+            3. 合并父类特定参数
+            4. 最终创建并返回列表序列化器实例
         """
+        # 初始化父类参数存储字典
         list_kwargs = {}
+        
+        # 分离需要从kwargs中移除并专门传递给父类的参数
+        # LIST_SERIALIZER_KWARGS_REMOVE包含需要移交给父类的参数名列表
         for key in LIST_SERIALIZER_KWARGS_REMOVE:
             value = kwargs.pop(key, None)
             if value is not None:
                 list_kwargs[key] = value
+
+        # 创建子序列化器实例，将剩余参数传递给子类
         list_kwargs['child'] = cls(*args, **kwargs)
+
+        # 从原始kwargs中筛选出父类允许使用的参数进行合并
+        # LIST_SERIALIZER_KWARGS定义了父类可接受的参数名列表
         list_kwargs.update({
             key: value for key, value in kwargs.items()
             if key in LIST_SERIALIZER_KWARGS
         })
+
+        # 获取Meta类配置，确定要使用的列表序列化器类
         meta = getattr(cls, 'Meta', None)
         list_serializer_class = getattr(meta, 'list_serializer_class', ListSerializer)
+
+        # 使用处理后的参数实例化列表序列化器
         return list_serializer_class(*args, **list_kwargs)
+
 
     def to_internal_value(self, data):
         raise NotImplementedError('`to_internal_value()` must be implemented.')
@@ -243,6 +259,20 @@ class BaseSerializer(Field):
 
     @property
     def data(self):
+        """
+        获取序列化后的数据表示
+
+        该方法负责在安全状态下返回序列化后的数据。在访问数据前必须确保已调用`.is_valid()`完成验证，
+        否则会抛出异常。数据生成采用延迟计算机制，只在首次访问时生成并缓存结果。
+
+        Returns:
+            dict: 序列化后的数据结果，具体类型由`to_representation`方法决定
+
+        Raises:
+            AssertionError: 当未经验证直接访问数据时抛出
+        """
+        
+        # 前置条件检查：确保在访问数据前已完成验证
         if hasattr(self, 'initial_data') and not hasattr(self, '_validated_data'):
             msg = (
                 'When a serializer is passed a `data` keyword argument you '
@@ -253,14 +283,22 @@ class BaseSerializer(Field):
             )
             raise AssertionError(msg)
 
+        # 延迟数据生成逻辑：根据对象状态选择不同的数据源进行序列化
         if not hasattr(self, '_data'):
+            # 情况1：存在实例对象且无验证错误时，序列化实例对象
             if self.instance is not None and not getattr(self, '_errors', None):
                 self._data = self.to_representation(self.instance)
+            
+            # 情况2：存在已验证数据且无错误时，序列化已验证数据
             elif hasattr(self, '_validated_data') and not getattr(self, '_errors', None):
                 self._data = self.to_representation(self.validated_data)
+            
+            # 默认情况：获取初始化数据
             else:
                 self._data = self.get_initial()
+                
         return self._data
+
 
     @property
     def errors(self):
@@ -282,40 +320,71 @@ class BaseSerializer(Field):
 
 class SerializerMetaclass(type):
     """
-    This metaclass sets a dictionary named `_declared_fields` on the class.
+    序列化器的元类，用于自动收集字段定义
 
-    Any instances of `Field` included as attributes on either the class
-    or on any of its superclasses will be include in the
-    `_declared_fields` dictionary.
+    该元类会在类上创建_declared_fields字典属性，自动收集当前类及其父类中
+    所有Field类型的属性，并正确处理字段继承关系
+
+    Attributes:
+        _declared_fields: 字典类型，存储字段名与对应Field实例的映射关系
     """
 
     @classmethod
     def _get_declared_fields(cls, bases, attrs):
+        """
+        收集当前类和基类中声明的字段定义
+
+        Args:
+            bases: tuple类型，当前类的基类元组
+            attrs: dict类型，当前类的属性字典
+
+        Returns:
+            dict: 排序合并后的字段字典，包含当前类及其基类的所有Field定义，
+                键为字段名，值为对应的Field实例
+        """
+        # 处理当前类定义的字段
+        # 从类属性中提取所有Field实例，并按创建顺序排序
         fields = [(field_name, attrs.pop(field_name))
                   for field_name, obj in list(attrs.items())
                   if isinstance(obj, Field)]
         fields.sort(key=lambda x: x[1]._creation_counter)
 
-        # Ensures a base class field doesn't override cls attrs, and maintains
-        # field precedence when inheriting multiple parents. e.g. if there is a
-        # class C(A, B), and A and B both define 'field', use 'field' from A.
+        # 处理基类继承的字段
+        # 使用known集合防止子类字段被父类覆盖，维护多继承时的字段优先级
         known = set(attrs)
 
         def visit(name):
+            """标记字段名为已处理，防止后续重复添加"""
             known.add(name)
             return name
 
+        # 按基类声明顺序逆向收集字段（Python MRO的逆向）
+        # 保证后继承的基类字段优先级低于先继承的基类,先收集子类字段，再收集父类字段。
         base_fields = [
             (visit(name), f)
             for base in bases if hasattr(base, '_declared_fields')
             for name, f in base._declared_fields.items() if name not in known
         ]
 
+        # 合并基类字段和当前类字段，基类字段在前
         return dict(base_fields + fields)
 
     def __new__(cls, name, bases, attrs):
+        """
+        创建新类时自动处理字段定义
+
+        Args:
+            name: str类型，要创建的类名
+            bases: tuple类型，基类元组
+            attrs: dict类型，类属性字典
+
+        Returns:
+            type: 新创建的类实例
+        """
+        # 在类创建时设置_declared_fields属性
         attrs['_declared_fields'] = cls._get_declared_fields(bases, attrs)
         return super().__new__(cls, name, bases, attrs)
+
 
 
 def as_serializer_error(exc):
@@ -351,23 +420,37 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
 
     def set_value(self, dictionary, keys, value):
         """
-        Similar to Python's built in `dictionary[key] = value`,
-        but takes a list of nested keys instead of a single key.
+        在嵌套字典结构中设置指定路径的值，支持多级键创建/更新
 
+
+        参数:
+        dictionary (dict): 要被修改的目标字典对象，会被原地修改
+        keys (list): 表示嵌套路径的键列表，空列表表示直接合并value到根字典
+        value: 要设置的目标值，可以是任意数据类型或字典对象
+        
+        返回值:
+        无返回值，直接修改输入的dictionary参数
+        
+        示例:
         set_value({'a': 1}, [], {'b': 2}) -> {'a': 1, 'b': 2}
         set_value({'a': 1}, ['x'], 2) -> {'a': 1, 'x': 2}
         set_value({'a': 1}, ['x', 'y'], 2) -> {'a': 1, 'x': {'y': 2}}
         """
+        # 处理空键列表的特殊情况：直接合并value到根字典
         if not keys:
             dictionary.update(value)
             return
 
+        # 遍历除最后一个键之外的所有中间键
+        # 自动创建不存在的中间字典结构
         for key in keys[:-1]:
             if key not in dictionary:
                 dictionary[key] = {}
             dictionary = dictionary[key]
 
+        # 在最终的嵌套层级设置目标值
         dictionary[keys[-1]] = value
+
 
     @cached_property
     def fields(self):
@@ -377,6 +460,10 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
         # `fields` is evaluated lazily. We do this to ensure that we don't
         # have issues importing modules that use ModelSerializers as fields,
         # even if Django's app-loading stage has not yet run.
+
+        # book_name = serializers.CharField(source='name')
+        # 通过BindingDict去绑定book_name与name的映射关系。
+        # 如下，这里传入的key是book_name，value是CharField
         fields = BindingDict(self)
         for key, value in self.get_fields().items():
             fields[key] = value
@@ -440,23 +527,38 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
 
     def run_validation(self, data=empty):
         """
-        We override the default `run_validation`, because the validation
-        performed by validators and the `.validate()` method should
-        be coerced into an error dictionary with a 'non_fields_error' key.
+        执行序列化器的完整验证流程
+
+        Args:
+            data: 要验证的原始输入数据，默认为空值标记
+
+        Returns:
+            经过清洗和验证的数据，如果输入为空值则直接返回空数据
+
+        Raises:
+            ValidationError: 当验证过程中发现错误时抛出
         """
+        # 第一阶段：空值检查
         (is_empty_value, data) = self.validate_empty_values(data)
         if is_empty_value:
             return data
 
+        # 第二阶段：数据转换和验证
+        # 将原始数据转换为内部表示形式
         value = self.to_internal_value(data)
+        
         try:
+            # 执行字段级别验证器
             self.run_validators(value)
+            # 执行对象级验证（自定义validate方法）
             value = self.validate(value)
             assert value is not None, '.validate() should return the validated data'
         except (ValidationError, DjangoValidationError) as exc:
+            # 统一将验证错误转换为DRF的序列化错误格式
             raise ValidationError(detail=as_serializer_error(exc))
 
         return value
+
 
     def _read_only_defaults(self):
         fields = [
@@ -476,19 +578,45 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
 
     def run_validators(self, value):
         """
-        Add read_only fields with defaults to value before running validators.
+        执行字段验证器，处理只读字段的默认值合并逻辑
+
+        Args:
+            value (dict/any): 需要验证的输入值。当为字典类型时，会自动合并只读字段的默认值；
+                            非字典类型时直接使用原始值进行验证
+
+        Returns:
+            None: 该方法没有返回值，验证结果通过抛出 ValidationError 异常来反馈
         """
+        # 处理字典类型的输入值：合并只读字段默认值与传入值
         if isinstance(value, dict):
+            # 获取只读字段的默认值作为基础字典
             to_validate = self._read_only_defaults()
+            # 同时展示只读字段的默认值，并使用传入值覆盖
             to_validate.update(value)
         else:
+            # 非字典类型直接使用原始值
             to_validate = value
+        # 运行Field级别的验证器
         super().run_validators(to_validate)
+
 
     def to_internal_value(self, data):
         """
+        将原始数据类型字典转换为内部值字典
+
+        Args:
+            data: 原始输入数据，要求为字典类型(Mapping)
+
+        Returns:
+            dict: 处理后的字典，包含通过验证的字段数据
+
+        Raises:
+            ValidationError: 当输入数据不符合要求或字段验证失败时抛出
+        """
+        """
         Dict of native values <- Dict of primitive datatypes.
         """
+        # 输入类型检查：确保数据为字典类型
         if not isinstance(data, Mapping):
             message = self.error_messages['invalid'].format(
                 datatype=type(data).__name__
@@ -497,17 +625,26 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
             }, code='invalid')
 
+        # 初始化返回结构和错误容器
         ret = {}
         errors = {}
-        fields = self._writable_fields
+        # 获取所有可写字段定义
+        # fields type: Field
+        fields = self._writable_fields 
 
+        # 遍历处理每个字段的验证逻辑
         for field in fields:
+            # 获取字段的定制验证方法（如果存在）
             validate_method = getattr(self, 'validate_' + field.field_name, None)
+            # 从原始数据中提取字段值
             primitive_value = field.get_value(data)
             try:
+                # 执行字段基础验证
                 validated_value = field.run_validation(primitive_value)
+                # 执行字段自定义验证方法
                 if validate_method is not None:
                     validated_value = validate_method(validated_value)
+            # 处理不同框架的验证错误类型
             except ValidationError as exc:
                 errors[field.field_name] = exc.detail
             except DjangoValidationError as exc:
@@ -515,12 +652,16 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
             except SkipField:
                 pass
             else:
+                # 将验证通过的值写入返回字典
+                # 通过source_attrs构建基于原始字段的字典。
                 self.set_value(ret, field.source_attrs, validated_value)
 
+        # 存在验证错误时抛出聚合异常
         if errors:
             raise ValidationError(errors)
 
         return ret
+
 
     def to_representation(self, instance):
         """
@@ -663,11 +804,27 @@ class ListSerializer(BaseSerializer):
 
     def to_internal_value(self, data):
         """
-        List of dicts of native values <- List of dicts of primitive datatypes.
+        将原始数据转换为内部表示形式（包含数据验证和格式转换）
+
+        Args:
+            data: 需要处理的原始输入数据，可能是HTML表单数据或原始数据类型组成的列表
+
+        Returns:
+            list: 由经过验证的字典组成的列表，每个字典包含转换后的内部值
+
+        Raises:
+            ValidationError: 当数据不符合以下条件时抛出：
+                - 输入不是列表类型
+                - 不允许空列表时传入空列表
+                - 列表长度超过max_length限制
+                - 列表长度不足min_length限制
+                - 列表元素验证失败
         """
+        # 处理HTML表单输入的预处理逻辑
         if html.is_html_input(data):
             data = html.parse_html_list(data, default=[])
 
+        # 基础类型校验：确保输入是列表类型
         if not isinstance(data, list):
             message = self.error_messages['not_a_list'].format(
                 input_type=type(data).__name__
@@ -676,29 +833,35 @@ class ListSerializer(BaseSerializer):
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
             }, code='not_a_list')
 
+        # 空列表校验逻辑
         if not self.allow_empty and len(data) == 0:
             message = self.error_messages['empty']
             raise ValidationError({
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
             }, code='empty')
 
+        # 列表长度上限校验
         if self.max_length is not None and len(data) > self.max_length:
             message = self.error_messages['max_length'].format(max_length=self.max_length)
             raise ValidationError({
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
             }, code='max_length')
 
+        # 列表长度下限校验
         if self.min_length is not None and len(data) < self.min_length:
             message = self.error_messages['min_length'].format(min_length=self.min_length)
             raise ValidationError({
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
             }, code='min_length')
 
+        # 初始化结果容器和错误容器
         ret = []
         errors = []
 
+        # 遍历处理每个列表元素
         for item in data:
             try:
+                # 执行子元素级验证
                 validated = self.run_child_validation(item)
             except ValidationError as exc:
                 errors.append(exc.detail)
@@ -706,10 +869,12 @@ class ListSerializer(BaseSerializer):
                 ret.append(validated)
                 errors.append({})
 
+        # 汇总处理过程中产生的错误
         if any(errors):
             raise ValidationError(errors)
 
         return ret
+
 
     def to_representation(self, data):
         """
