@@ -896,6 +896,9 @@ class CharField(Field):
 
 
 class EmailField(CharField):
+    """
+    电子邮件字段类，继承自CharField，用于验证和处理电子邮件地址。
+    """
     default_error_messages = {
         'invalid': _('Enter a valid email address.')
     }
@@ -907,6 +910,9 @@ class EmailField(CharField):
 
 
 class RegexField(CharField):
+    """
+    正则表达式字段类，继承自CharField，用于验证和处理符合特定正则表达式的字符串。
+    """
     default_error_messages = {
         'invalid': _('This value does not match the required pattern.')
     }
@@ -918,6 +924,12 @@ class RegexField(CharField):
 
 
 class SlugField(CharField):
+    """
+    Slug字段类，继承自CharField，用于验证和处理符合slug格式的字符串。
+
+    Slug格式字符串的特点是由字母、数字、连字符（-）或下划线（_）组成，全小写且无空格，常用于生成URL友好、简洁且可读的标识符
+    （如 this-is-a-slug-2023）
+    """
     default_error_messages = {
         'invalid': _('Enter a valid "slug" consisting of letters, numbers, underscores or hyphens.'),
         'invalid_unicode': _('Enter a valid "slug" consisting of Unicode letters, numbers, underscores, or hyphens.')
@@ -934,6 +946,9 @@ class SlugField(CharField):
 
 
 class URLField(CharField):
+    """
+    URL字段类，继承自CharField，用于验证和处理URL地址。
+    """
     default_error_messages = {
         'invalid': _('Enter a valid URL.')
     }
@@ -952,7 +967,9 @@ class UUIDField(Field):
     }
 
     def __init__(self, **kwargs):
+        """初始化UUID字段，校验格式参数有效性"""
         self.uuid_format = kwargs.pop('format', 'hex_verbose')
+        # 格式参数有效性验证
         if self.uuid_format not in self.valid_formats:
             raise ValueError(
                 'Invalid format for uuid representation. '
@@ -961,6 +978,18 @@ class UUIDField(Field):
         super().__init__(**kwargs)
 
     def to_internal_value(self, data):
+        """将输入数据转换为UUID对象
+        
+        参数:
+            data: 输入数据，支持int/str/uuid.UUID类型
+            
+        返回:
+            uuid.UUID实例
+            
+        异常:
+            当无法转换时抛出ValidationError
+        """
+        # 处理不同类型输入数据的转换逻辑
         if not isinstance(data, uuid.UUID):
             try:
                 if isinstance(data, int):
@@ -974,10 +1003,20 @@ class UUIDField(Field):
         return data
 
     def to_representation(self, value):
+        """将UUID对象转换为指定格式的表示形式
+        
+        参数:
+            value: uuid.UUID实例
+            
+        返回:
+            根据format参数返回对应格式的字符串或整数值
+        """
+        # 根据配置的格式返回相应表示形式
         if self.uuid_format == 'hex_verbose':
             return str(value)
         else:
             return getattr(value, self.uuid_format)
+
 
 
 class IPAddressField(CharField):
