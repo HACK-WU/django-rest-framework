@@ -816,6 +816,19 @@ class BooleanField(Field):
 # String types...
 
 class CharField(Field):
+    """
+    字符串字段类，用于处理字符串类型数据的验证和转换。
+
+    继承自Field类，提供字符串特有验证逻辑，包括最大/最小长度、空白处理、空格修剪等。
+
+    Attributes:
+        default_error_messages (dict): 默认错误消息配置
+            - invalid: 非字符串类型数据错误
+            - blank: 空字段错误
+            - max_length: 超过最大长度错误
+            - min_length: 不足最小长度错误
+        initial (str): 字段默认值，空字符串
+    """
     default_error_messages = {
         'invalid': _('Not a valid string.'),
         'blank': _('This field may not be blank.'),
@@ -825,27 +838,38 @@ class CharField(Field):
     initial = ''
 
     def __init__(self, **kwargs):
+        """
+        初始化字符串字段配置
+
+        Args:
+            allow_blank (bool): 是否允许空字符串，默认False
+            trim_whitespace (bool): 是否自动去除首尾空格，默认True
+            max_length (int|None): 允许的最大字符长度，默认无限制
+            min_length (int|None): 允许的最小字符长度，默认无限制
+        """
         self.allow_blank = kwargs.pop('allow_blank', False)
         self.trim_whitespace = kwargs.pop('trim_whitespace', True)
         self.max_length = kwargs.pop('max_length', None)
         self.min_length = kwargs.pop('min_length', None)
         super().__init__(**kwargs)
+
+        # 根据长度限制动态添加验证器
         if self.max_length is not None:
             message = lazy_format(self.error_messages['max_length'], max_length=self.max_length)
-            self.validators.append(
-                MaxLengthValidator(self.max_length, message=message))
+            self.validators.append(MaxLengthValidator(self.max_length, message=message))
         if self.min_length is not None:
             message = lazy_format(self.error_messages['min_length'], min_length=self.min_length)
-            self.validators.append(
-                MinLengthValidator(self.min_length, message=message))
+            self.validators.append(MinLengthValidator(self.min_length, message=message))
 
+        # 添加特殊字符校验规则
         self.validators.append(ProhibitNullCharactersValidator())
         self.validators.append(ProhibitSurrogateCharactersValidator())
 
     def run_validation(self, data=empty):
-        # Test for the empty string here so that it does not get validated,
-        # and so that subclasses do not need to handle it explicitly
-        # inside the `to_internal_value()` method.
+        """
+        执行数据验证主逻辑
+        """
+        # 检测空字符串场景，避免进入父类验证流程
         if data == '' or (self.trim_whitespace and str(data).strip() == ''):
             if not self.allow_blank:
                 self.fail('blank')
@@ -853,16 +877,22 @@ class CharField(Field):
         return super().run_validation(data)
 
     def to_internal_value(self, data):
-        # We're lenient with allowing basic numerics to be coerced into strings,
-        # but other types should fail. Eg. unclear if booleans should represent as `true` or `True`,
-        # and composites such as lists are likely user error.
+        """
+        将输入数据转换为内部表示形式
+
+        """
+        # 允许int/float类型隐式转换，禁止布尔值和其他类型
         if isinstance(data, bool) or not isinstance(data, (str, int, float,)):
             self.fail('invalid')
         value = str(data)
         return value.strip() if self.trim_whitespace else value
 
     def to_representation(self, value):
+        """
+        将内部值转换为序列化表示形式
+        """
         return str(value)
+
 
 
 class EmailField(CharField):

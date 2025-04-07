@@ -69,25 +69,50 @@ def markup_description(description):
 
 class lazy_format:
     """
-    Delay formatting until it's actually needed.
+    延迟字符串格式化直到实际需要时，适用于格式字符串或参数需要惰性求值的场景
 
-    Useful when the format string or one of the arguments is lazy.
+    避免使用Django的惰性实现，以提升性能
 
-    Not using Django's lazy because it is too slow.
+    Attributes:
+        format_string: 待格式化的原始字符串模板
+        args: 格式化所需的位置参数
+        kwargs: 格式化所需的关键字参数
+        result: 缓存格式化后的最终结果
     """
     __slots__ = ('format_string', 'args', 'kwargs', 'result')
 
     def __init__(self, format_string, *args, **kwargs):
+        """
+        初始化延迟格式化对象
+
+        Args:
+            format_string: 需要延迟格式化的字符串模板
+            *args: 字符串模板的位置参数
+            **kwargs: 字符串模板的关键字参数
+        """
         self.result = None
         self.format_string = format_string
         self.args = args
         self.kwargs = kwargs
 
     def __str__(self):
+        """
+        执行实际格式化操作并返回结果字符串
+
+        首次调用时会进行实际格式化计算，后续调用直接返回缓存结果。
+        格式化完成后会清理原始参数以释放内存
+        """
+        # 首次访问时执行实际格式化操作
         if self.result is None:
             self.result = self.format_string.format(*self.args, **self.kwargs)
+            # 清理原始参数释放引用
             self.format_string, self.args, self.kwargs = None, None, None
         return self.result
 
     def __mod__(self, value):
+        """
+        支持使用%运算符进行格式化
+
+        用于兼容旧式字符串格式化操作，实际调用标准字符串的%格式化方法
+        """
         return str(self) % value
