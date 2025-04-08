@@ -960,6 +960,11 @@ class URLField(CharField):
 
 
 class UUIDField(Field):
+    # 支持的UUID格式
+    # hex_verbose: 带连字符的16进制字符串，如 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
+    # hex: 不带连字符的16进制字符串，如 'f47ac10b58cc4372a5670e02b2c3d479'
+    # int: 十进制整数，如 12890220691876749023
+    # urn: URN格式，如 'urn:uuid:f47ac10b-58cc-4372-a567-0e02b2c3d479
     valid_formats = ('hex_verbose', 'hex', 'int', 'urn')
 
     default_error_messages = {
@@ -1050,32 +1055,56 @@ class IPAddressField(CharField):
 # Number types...
 
 class IntegerField(Field):
+    """
+    整数字段处理类，继承自Field基类
+    实现整数类型数据的验证、序列化和反序列化逻辑
+
+    Attributes:
+        default_error_messages (dict): 默认错误消息配置
+            - invalid: 输入非有效整数时的错误提示
+            - max_value: 超过最大值时的错误提示（支持{max_value}占位符）
+            - min_value: 低于最小值时的错误提示（支持{min_value}占位符）
+            - max_string_length: 输入字符串过长时的错误提示
+        MAX_STRING_LENGTH (int): 最大允许字符串长度，防止恶意长字符串攻击
+        re_decimal (Pattern): 正则表达式模式，用于匹配".0"结尾的十进制字符串
+    """
     default_error_messages = {
         'invalid': _('A valid integer is required.'),
         'max_value': _('Ensure this value is less than or equal to {max_value}.'),
         'min_value': _('Ensure this value is greater than or equal to {min_value}.'),
         'max_string_length': _('String value too large.')
     }
-    MAX_STRING_LENGTH = 1000  # Guard against malicious string inputs.
-    re_decimal = re.compile(r'\.0*\s*$')  # allow e.g. '1.0' as an int, but not '1.2'
+    # 防止恶意输入的超长字符串（最大允许1000字符）
+    MAX_STRING_LENGTH = 1000
+    # 匹配以.0结尾的数字字符串（允许"1.0"格式，排除"1.2"格式）
+    re_decimal = re.compile(r'\.0*\s*$')
 
     def __init__(self, **kwargs):
+        """
+        初始化整数字段验证器
+
+        Args:
+            max_value (int|None): 允许的最大值（可选）
+            min_value (int|None): 允许的最小值（可选）
+            **kwargs: 其他传递给父类的参数
+        """
         self.max_value = kwargs.pop('max_value', None)
         self.min_value = kwargs.pop('min_value', None)
         super().__init__(**kwargs)
+
+        # 根据最大/最小值配置验证器
         if self.max_value is not None:
             message = lazy_format(self.error_messages['max_value'], max_value=self.max_value)
-            self.validators.append(
-                MaxValueValidator(self.max_value, message=message))
+            self.validators.append(MaxValueValidator(self.max_value, message=message))
         if self.min_value is not None:
             message = lazy_format(self.error_messages['min_value'], min_value=self.min_value)
-            self.validators.append(
-                MinValueValidator(self.min_value, message=message))
+            self.validators.append(MinValueValidator(self.min_value, message=message))
 
     def to_internal_value(self, data):
         if isinstance(data, str) and len(data) > self.MAX_STRING_LENGTH:
             self.fail('max_string_length')
 
+        # 尝试转换字符串为整数（支持"1.0"格式的转换）
         try:
             data = int(self.re_decimal.sub('', str(data)))
         except (ValueError, TypeError):
