@@ -450,27 +450,47 @@ class Field:
 
     def get_value(self, dictionary):
         """
-        Given the *incoming* primitive data, return the value for this field
-        that should be validated and transformed to a native value.
+        从原始数据字典中提取本字段的验证值
+
+        Args:
+            dictionary (dict): 包含原始输入数据的字典对象。可能来自HTML表单提交或其他数据源
+
+        Returns:
+            any: 返回字段值，可能是以下情况之一：
+                - 原始字典中的字段值
+                - 空值标记（empty）
+                - None（当允许空值时）
+                - 默认空HTML值（self.default_empty_html）
+                - 空字符串（当允许空白时）
+
+        处理逻辑：
+            1. 对HTML表单输入的特殊处理
+            2. 处理字段不存在的情况（考虑部分更新场景）
+            3. 处理空字符串的不同转换规则
         """
         if html.is_html_input(dictionary):
-            # HTML forms will represent empty fields as '', and cannot
-            # represent None or False values directly.
+            # HTML表单特殊处理：表单提交的空字段会被表示为''，无法直接表示None/False
             if self.field_name not in dictionary:
+                # 字段不存在时的处理逻辑
                 if getattr(self.root, 'partial', False):
                     return empty
                 return self.default_empty_html
+
             ret = dictionary[self.field_name]
+            
+            # 处理空字符串值的转换规则
             if ret == '' and self.allow_null:
-                # If the field is blank, and null is a valid value then
-                # determine if we should use null instead.
+                # 允许null时，将空字符串转为None（除非明确允许空白）
                 return '' if getattr(self, 'allow_blank', False) else None
             elif ret == '' and not self.required:
-                # If the field is blank, and emptiness is valid then
-                # determine if we should use emptiness instead.
+                # 非必填字段允许空值时，返回空字符串或empty标记
                 return '' if getattr(self, 'allow_blank', False) else empty
+            
             return ret
+
+        # 非HTML输入的简单处理：直接从字典获取或返回empty标记
         return dictionary.get(self.field_name, empty)
+
 
     def get_attribute(self, instance):
         """
@@ -960,11 +980,11 @@ class URLField(CharField):
 
 
 class UUIDField(Field):
-    # 支持的UUID格式
-    # hex_verbose: 带连字符的16进制字符串，如 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
-    # hex: 不带连字符的16进制字符串，如 'f47ac10b58cc4372a5670e02b2c3d479'
-    # int: 十进制整数，如 12890220691876749023
-    # urn: URN格式，如 'urn:uuid:f47ac10b-58cc-4372-a567-0e02b2c3d479
+    # 支持的UUID格式：
+    # hex_verbose: 32位十六进制字符串，带分隔符，如 '550e8400-e29b-41d4-a716-446655440000'
+    # hex: 32位十六进制字符串，不带分隔符，如 '550e8400e29b41d4a716446655440000'
+    # int: 整数形式的UUID，如 12345678901234567890123456789012
+    # urn: URN格式的UUID，如 'urn:uuid:550e8400-e29b-41d4-a716-446655440000'
     valid_formats = ('hex_verbose', 'hex', 'int', 'urn')
 
     default_error_messages = {
@@ -1576,6 +1596,14 @@ class DurationField(Field):
 # Choice types...
 
 class ChoiceField(Field):
+    """
+    用于处理有限选项集合的字段类，支持枚举、分组选项和HTML渲染控制
+
+    Attributes:
+        default_error_messages (dict): 默认错误消息字典，包含无效选择错误模板
+        html_cutoff (int|None): 控制HTML下拉列表显示的最大选项数量
+        html_cutoff_text (str): 当选项被截断时显示的提示文本模板
+    """
     default_error_messages = {
         'invalid_choice': _('"{input}" is not a valid choice.')
     }
@@ -1583,6 +1611,15 @@ class ChoiceField(Field):
     html_cutoff_text = _('More than {count} items...')
 
     def __init__(self, choices, **kwargs):
+        """
+        初始化选择字段
+
+        Args:
+            choices: 可用选项集合，支持嵌套分组结构
+            html_cutoff: 从kwargs获取，覆盖类属性，控制HTML显示截断阈值
+            html_cutoff_text: 从kwargs获取，覆盖类属性，截断提示文本
+            allow_blank: 是否允许空字符串作为有效值
+        """
         self.choices = choices
         self.html_cutoff = kwargs.pop('html_cutoff', self.html_cutoff)
         self.html_cutoff_text = kwargs.pop('html_cutoff_text', self.html_cutoff_text)
@@ -1592,25 +1629,39 @@ class ChoiceField(Field):
         super().__init__(**kwargs)
 
     def to_internal_value(self, data):
+        """将原始输入数据转换为内部表示形式"""
+        # 处理允许空值的情况
         if data == '' and self.allow_blank:
             return ''
+        
+        # 处理枚举类型特殊转换
         if isinstance(data, Enum) and str(data) != str(data.value):
             data = data.value
+        
+        # 通过预构建的映射表查找对应值
         try:
             return self.choice_strings_to_values[str(data)]
         except KeyError:
             self.fail('invalid_choice', input=data)
 
     def to_representation(self, value):
+        """将内部值转换为序列化表示形式"""
+        # 保留空值和None原样返回
         if value in ('', None):
             return value
+        
+        # 处理枚举值的特殊转换
         if isinstance(value, Enum) and str(value) != str(value.value):
             value = value.value
+        
+        # 优先返回选项映射值，找不到时返回原始值
         return self.choice_strings_to_values.get(str(value), value)
 
     def iter_options(self):
         """
-        Helper method for use with templates rendering select widgets.
+        生成用于模板渲染的选项迭代器
+        
+        实现分组选项的智能截断处理，用于生成HTML选择控件
         """
         return iter_options(
             self.grouped_choices,
@@ -1619,10 +1670,14 @@ class ChoiceField(Field):
         )
 
     def _get_choices(self):
+        """获取扁平化的选项列表（兼容旧接口）"""
         return self._choices
 
     def _set_choices(self, choices):
+        """处理原始选项输入，构建结构化数据"""
+        # 转换嵌套的分组选项结构
         self.grouped_choices = to_choices_dict(choices)
+        # 生成扁平化的选项列表
         self._choices = flatten_choices_dict(self.grouped_choices)
 
         # Map the string representation of choices to the underlying value.
@@ -1632,7 +1687,10 @@ class ChoiceField(Field):
             str(key.value) if isinstance(key, Enum) and str(key) != str(key.value) else str(key): key for key in self.choices
         }
 
+    # 当外部获取field.choices时，实际调用的是_get_choices方法
+    # 当外部设置field.choices = value时，实际调用的是_set_choices方法
     choices = property(_get_choices, _set_choices)
+
 
 
 class MultipleChoiceField(ChoiceField):
@@ -1677,6 +1735,7 @@ class MultipleChoiceField(ChoiceField):
 
 
 class FilePathField(ChoiceField):
+    # 用于序列化可选的文件路径
     default_error_messages = {
         'invalid_choice': _('"{input}" is not a valid path choice.')
     }
@@ -1689,6 +1748,7 @@ class FilePathField(ChoiceField):
             path, match=match, recursive=recursive, allow_files=allow_files,
             allow_folders=allow_folders, required=required
         )
+        # field.choices会返回一个包含所有可能路径的列表
         kwargs['choices'] = field.choices
         kwargs['required'] = required
         super().__init__(**kwargs)
@@ -1697,6 +1757,16 @@ class FilePathField(ChoiceField):
 # File types...
 
 class FileField(Field):
+    """处理文件上传的字段类，继承自Field，用于验证和表示上传的文件数据
+
+    错误消息配置:
+        default_error_messages: 包含各种验证失败场景的错误消息模板
+            - required: 未提交文件时的错误
+            - invalid: 提交数据不是有效文件时的错误
+            - no_name: 无法确定文件名时的错误
+            - empty: 提交空文件且不允许时的错误
+            - max_length: 文件名超过最大长度限制时的错误
+    """
     default_error_messages = {
         'required': _('No file was submitted.'),
         'invalid': _('The submitted data was not a file. Check the encoding type on the form.'),
@@ -1706,6 +1776,12 @@ class FileField(Field):
     }
 
     def __init__(self, **kwargs):
+        """初始化文件字段
+        Args:
+            max_length (int, optional): 允许的文件名最大长度
+            allow_empty_file (bool, optional): 是否允许空文件，默认False
+            use_url (bool, optional): 表示值时是否使用文件URL（否则使用文件名）
+        """
         self.max_length = kwargs.pop('max_length', None)
         self.allow_empty_file = kwargs.pop('allow_empty_file', False)
         if 'use_url' in kwargs:
@@ -1713,41 +1789,80 @@ class FileField(Field):
         super().__init__(**kwargs)
 
     def to_internal_value(self, data):
+        """将原始输入数据转换为内部表示格式，执行文件验证
+        
+        Args:
+            data: 上传的文件对象，应具有name和size属性
+            
+        Returns:
+            UploadedFile: 验证通过的文件对象
+            
+        Raises:
+            ValidationError: 当文件不符合验证规则时抛出
+        """
+        # 基础属性验证：确保数据是有效的文件对象
         try:
-            # `UploadedFile` objects should have name and size attributes.
             file_name = data.name
             file_size = data.size
         except AttributeError:
             self.fail('invalid')
 
+        # 文件名空值检查
         if not file_name:
             self.fail('no_name')
+        
+        # 空文件检查（根据allow_empty_file配置）
         if not self.allow_empty_file and not file_size:
             self.fail('empty')
+            
+        # 文件名长度验证
         if self.max_length and len(file_name) > self.max_length:
             self.fail('max_length', max_length=self.max_length, length=len(file_name))
 
         return data
 
     def to_representation(self, value):
+        """将内部文件对象转换为序列化表示形式
+        
+        Args:
+            value (UploadedFile): 需要序列化的文件对象
+            
+        Returns:
+            str/None: 根据配置返回文件URL或文件名，无法表示时返回None
+        """
         if not value:
             return None
 
+        # 确定使用URL还是文件名的表示策略
         use_url = getattr(self, 'use_url', api_settings.UPLOADED_FILES_USE_URL)
+        
         if use_url:
+            # 生成可访问的完整URL（优先使用请求上下文构建绝对路径）
             try:
-                url = value.url
+                url = value.url #  # value是文件对象（如ImageFieldFile）
             except AttributeError:
                 return None
+            
             request = self.context.get('request', None)
             if request is not None:
+                # 存在请求上下文时，生成包含完整域名的绝对URL
+                # 例如：https://example.com/media/avatar.jpg
                 return request.build_absolute_uri(url)
+
+            # 无请求上下文时返回相对URL（如/media/avatar.jpg）
             return url
 
         return value.name
 
 
 class ImageField(FileField):
+    """
+    处理图像上传的自定义字段类，继承自FileField
+    
+    属性:
+        default_error_messages (dict): 默认错误消息配置
+            - invalid_image: 上传文件非有效图像或已损坏时的错误消息
+    """
     default_error_messages = {
         'invalid_image': _(
             'Upload a valid image. The file you uploaded was either not an image or a corrupted image.'
@@ -1755,17 +1870,44 @@ class ImageField(FileField):
     }
 
     def __init__(self, **kwargs):
+        """
+        初始化图像字段
+        
+        参数:
+            **kwargs: 接收可变关键字参数
+                - _DjangoImageField: 允许注入替代的Django图像字段类（主要用于测试场景）
+        """
         self._DjangoImageField = kwargs.pop('_DjangoImageField', DjangoImageField)
         super().__init__(**kwargs)
 
     def to_internal_value(self, data):
-        # Image validation is a bit grungy, so we'll just outright
-        # defer to Django's implementation so we don't need to
-        # consider it, or treat PIL as a test dependency.
+        """
+        将上传数据转换为内部Python表示形式
+        
+        参数:
+            data: 上传的原始文件数据
+            
+        返回值:
+            django.core.files.images.ImageFile: 验证通过的图像文件对象
+            
+        异常:
+            ValidationError: 当文件不是有效图像时抛出
+            
+        实现说明:
+            复用Django原生ImageField的验证逻辑，避免重复实现图像验证
+            和PIL依赖管理问题
+        """
+        # 通过父类获取基础文件对象
         file_object = super().to_internal_value(data)
+        
+        # 创建Django原生图像字段实例并进行配置
         django_field = self._DjangoImageField()
+        # 同步错误消息配置保证验证错误提示一致性
         django_field.error_messages = self.error_messages
+        
+        # 复用Django内置的图像验证流程
         return django_field.clean(file_object)
+
 
 
 # Composite field types...
