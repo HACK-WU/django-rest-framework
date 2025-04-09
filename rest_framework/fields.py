@@ -91,29 +91,41 @@ def is_simple_callable(obj):
 
 def get_attribute(instance, attrs):
     """
-    Similar to Python's built in `getattr(instance, attr)`,
-    but takes a list of nested attributes, instead of a single attribute.
+    递归获取嵌套属性/键值，支持对象属性和字典键值混合访问
 
-    Also accepts either attribute lookup on objects or dictionary lookups.
+    Args:
+        instance: 要访问的初始对象/字典，可以是任意支持属性访问或字典访问的数据结构
+        attrs: list[str]，要递归访问的属性/键名序列，如 ['user', 'profile', 'age']
+
+    Returns:
+        最终访问到的属性值，如果中间某级属性不存在则返回 None
+
+    Raises:
+        ValueError: 当可调用属性执行时抛出 AttributeError/KeyError 时转换为此异常
     """
+    # 遍历每个属性名进行级联访问
     for attr in attrs:
         try:
+            # 处理字典类型的实例访问
             if isinstance(instance, Mapping):
                 instance = instance[attr]
+            # 处理对象属性访问
             else:
                 instance = getattr(instance, attr)
         except ObjectDoesNotExist:
             return None
+
+        # 当attr是一个方法名时，返回的instance就是一个函数，需要执行才能获取到值
+        # 处理可调用对象的执行逻辑
         if is_simple_callable(instance):
             try:
                 instance = instance()
             except (AttributeError, KeyError) as exc:
-                # If we raised an Attribute or KeyError here it'd get treated
-                # as an omitted field in `Field.get_attribute()`. Instead we
-                # raise a ValueError to ensure the exception is not masked.
+                # 将可调用属性执行时的特定异常转换为更明确的异常类型
                 raise ValueError('Exception raised in callable attribute "{}"; original exception was: {}'.format(attr, exc))
 
     return instance
+
 
 
 def to_choices_dict(choices):
@@ -345,6 +357,10 @@ class Field:
         # file_url = serializers.SerializerMethodField(source='*')
         # def get_file_url(self, obj):
         #     return obj.file.url if obj.file else None
+        # ----------------------------
+        # source的值也可以是一个函数，返回值作为字段值
+        # book_name = serializers.CharField(source="get_book_name")
+        # get_book_name 这个方法需要定义在model中
         self.source = source
         self.initial = self.initial if (initial is empty) else initial  # 实例初始值优先于类属性
         self.label = label
@@ -2007,6 +2023,7 @@ class ListField(Field):
 
 
 class DictField(Field):
+    # 这里的child是用于对字典的value进行验证
     child = _UnvalidatedField()
     initial = {}
     default_error_messages = {
@@ -2108,16 +2125,40 @@ class JSONField(Field):
         return dictionary.get(self.field_name, empty)
 
     def to_internal_value(self, data):
+        """
+        将输入数据转换为内部表示形式
+
+        参数:
+            self: 当前序列化器实例
+            data: 原始输入数据，可以是bytes/str/dict/list等类型
+
+        返回:
+            dict/list: 解析后的数据结构（成功解析JSON时）
+            any: 原始输入数据（非JSON处理路径）
+
+        异常:
+            当JSON解析/序列化失败时调用self.fail('invalid')
+        """
         try:
+            # 处理二进制数据或被标记为JSON字符串的特殊情况
             if self.binary or getattr(data, 'is_json_string', False):
+                # 将字节数据解码为字符串
                 if isinstance(data, bytes):
                     data = data.decode()
+                
+                # 使用自定义解码器解析JSON数据
                 return json.loads(data, cls=self.decoder)
             else:
+                # 验证数据是否可被序列化（结果不保存，仅检查有效性）
                 json.dumps(data, cls=self.encoder)
+        
+        # 捕获JSON解析/序列化过程中的错误
         except (TypeError, ValueError):
             self.fail('invalid')
+        
+        # 非JSON处理路径直接返回原始数据
         return data
+
 
     def to_representation(self, value):
         if self.binary:
