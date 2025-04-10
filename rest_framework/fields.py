@@ -179,6 +179,7 @@ def iter_options(grouped_choices, cutoff=None, cutoff_text=None):
     """
     Helper function for options and option groups in templates.
     """
+
     class StartOptionGroup:
         start_option_group = True
         end_option_group = False
@@ -340,7 +341,7 @@ class Field:
     
         # 参数有效性检查
         assert not (read_only and write_only), NOT_READ_ONLY_WRITE_ONLY  # 不能同时只读和只写
-        assert not (read_only and required), NOT_READ_ONLY_REQUIRED      # 只读字段不能设为必填
+        assert not (read_only and required), NOT_READ_ONLY_REQUIRED  # 只读字段不能设为必填
         assert not (required and default is not empty), NOT_REQUIRED_DEFAULT  # 必填字段不能有默认值
         assert not (read_only and self.__class__ == Field), USE_READONLYFIELD  # 基类Field不应直接使用
     
@@ -372,7 +373,7 @@ class Field:
         if self.default_empty_html is not empty:
             if default is not empty:
                 self.default_empty_html = default
-    
+
         # 验证器处理：使用自定义验证器或保持默认
         if validators is not None:
             self.validators = list(validators)
@@ -2121,6 +2122,7 @@ class JSONField(Field):
                     ret = str.__new__(cls, value)
                     ret.is_json_string = True
                     return ret
+
             return JSONString(dictionary[self.field_name])
         return dictionary.get(self.field_name, empty)
 
@@ -2192,15 +2194,28 @@ class ReadOnlyField(Field):
 
 class HiddenField(Field):
     """
-    A hidden field does not take input from the user, or present any output,
-    but it does populate a field in `validated_data`, based on its default
-    value. This is particularly useful when we have a `unique_for_date`
-    constraint on a pair of fields, as we need some way to include the date in
-    the validated data.
+    隐式字段类，不接收用户输入也不展示输出，但会将默认值注入到验证数据中
+    
+    适用于需要将特定值（如日期）隐式包含在验证数据中的场景（如unique_for_date约束）
+    继承自Field基类，强制write_only特性，始终使用默认值填充validated_data
+
+    Attributes:
+        继承父类Field的属性，但需强制提供default参数
     """
 
     def __init__(self, **kwargs):
+        """
+        初始化隐式字段
+        
+        参数要求：
+        - 必须包含default参数：指定该字段的默认值
+        - 自动设置write_only=True：强制该字段仅用于序列化输出
+        
+        参数异常：
+        - 当未提供default参数时抛出AssertionError
+        """
         assert 'default' in kwargs, 'default is a required argument.'
+        # 强制设置只写特性并调用父类初始化
         kwargs['write_only'] = True
         super().__init__(**kwargs)
 
@@ -2215,18 +2230,18 @@ class HiddenField(Field):
 
 class SerializerMethodField(Field):
     """
-    A read-only field that get its representation from calling a method on the
-    parent serializer class. The method called will be of the form
-    "get_{field_name}", and should take a single argument, which is the
-    object being serialized.
+    一个只读字段，通过调用父序列化类的方法来获取字段的序列化表示。
+    默认会调用名为 'get_{field_name}' 的方法，该方法接收被序列化的对象作为参数。
 
-    For example:
+    示例：
+        class ExampleSerializer(Serializer):
+            extra_info = SerializerMethodField()  # 自动调用 get_extra_info 方法
 
-    class ExampleSerializer(Serializer):
-        extra_info = SerializerMethodField()
+            def get_extra_info(self, obj):
+                return ...  # 返回计算后的数据
 
-        def get_extra_info(self, obj):
-            return ...  # Calculate some data to return.
+    Attributes:
+        method_name (str): 可选参数，指定要调用的自定义方法名称
     """
 
     def __init__(self, method_name=None, **kwargs):
@@ -2238,11 +2253,15 @@ class SerializerMethodField(Field):
     def bind(self, field_name, parent):
         # The method name defaults to `get_{field_name}`.
         if self.method_name is None:
+            # 默认方法名格式：get_<字段名>
             self.method_name = 'get_{field_name}'.format(field_name=field_name)
 
         super().bind(field_name, parent)
 
     def to_representation(self, value):
+        # 当source='*'时,self.source_attrs=[]
+        # 此时field.get_value()会返回整个对象instance.
+        # 之后会调用to_representation(instance) 所以这里的value就是整个对象instance
         method = getattr(self.parent, self.method_name)
         return method(value)
 
