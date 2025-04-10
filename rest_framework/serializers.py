@@ -548,7 +548,11 @@ class Serializer(BaseSerializer, metaclass=SerializerMetaclass):
         value = self.to_internal_value(data)
         
         try:
-            # 执行字段级别验证器
+            # 执行字段级别验证器，可以在内部的Meta类中定义上validators，这样所有的字段都会使用这些验证器
+            # 例如：
+            # class Meta:
+            #     validators = [MyCustomValidator()]
+            #
             self.run_validators(value)
             # 执行对象级验证（自定义validate方法）
             value = self.validate(value)
@@ -1219,12 +1223,21 @@ class ModelSerializer(Serializer):
 
     def get_fields(self):
         """
-        Return the dict of field names -> field instances that should be
-        used for `self.fields` when instantiating the serializer.
+        获取并构建序列化器所需的字段字典。
+
+        该方法负责收集所有显式声明的字段，并根据模型元数据自动生成未声明字段的实例。
+        同时处理额外的关键字参数、隐藏字段及深度限制验证。
+
+        Returns:
+            dict: 字段名字典，键为字段名称，值为对应的字段实例。
         """
+
+        # 初始化URL字段名为默认值（如果未设置）
         if self.url_field_name is None:
             self.url_field_name = api_settings.URL_FIELD_NAME
 
+        # 元类属性校验
+        # 确保序列化器类包含Meta内部类且定义了model属性
         assert hasattr(self, 'Meta'), (
             'Class {serializer_class} missing "Meta" attribute'.format(
                 serializer_class=self.__class__.__name__
@@ -1235,58 +1248,68 @@ class ModelSerializer(Serializer):
                 serializer_class=self.__class__.__name__
             )
         )
+        # 禁止在抽象模型上使用序列化器
         if model_meta.is_abstract_model(self.Meta.model):
             raise ValueError(
                 'Cannot use ModelSerializer with Abstract Models.'
             )
 
+        # 准备基础数据
+        # 深拷贝已声明字段防止原始数据被修改
         declared_fields = copy.deepcopy(self._declared_fields)
+        # 获取模型引用和嵌套深度配置
         model = getattr(self.Meta, 'model')
         depth = getattr(self.Meta, 'depth', 0)
 
+        # 深度参数校验
+        # 确保深度值在0-10的合理范围内
         if depth is not None:
             assert depth >= 0, "'depth' may not be negative."
             assert depth <= 10, "'depth' may not be greater than 10."
 
-        # Retrieve metadata about fields & relationships on the model class.
+        # 模型元数据解析
+        # 获取模型字段关系等元信息
         info = model_meta.get_field_info(model)
+        # 确定最终要处理的字段名称列表
         field_names = self.get_field_names(declared_fields, info)
 
-        # Determine any extra field arguments and hidden fields that
-        # should be included
+        # 扩展参数处理
+        # 获取额外参数并处理唯一性约束相关配置
         extra_kwargs = self.get_extra_kwargs()
         extra_kwargs, hidden_fields = self.get_uniqueness_extra_kwargs(
             field_names, declared_fields, extra_kwargs
         )
 
-        # Determine the fields that should be included on the serializer.
+        # 字段实例化流程
         fields = {}
-
         for field_name in field_names:
-            # If the field is explicitly declared on the class then use that.
+            # 优先使用显式声明的字段
             if field_name in declared_fields:
                 fields[field_name] = declared_fields[field_name]
                 continue
 
+            # 自动生成字段配置
+            # 从扩展参数中获取字段级配置
             extra_field_kwargs = extra_kwargs.get(field_name, {})
+            # 确定字段数据源，默认为字段名本身
             source = extra_field_kwargs.get('source', '*')
             if source == '*':
                 source = field_name
 
-            # Determine the serializer field class and keyword arguments.
+            # 动态构建字段
+            # 根据模型元数据确定字段类型和配置
             field_class, field_kwargs = self.build_field(
                 source, info, model, depth
             )
-
-            # Include any kwargs defined in `Meta.extra_kwargs`
+            # 合并全局扩展参数到字段配置
             field_kwargs = self.include_extra_kwargs(
                 field_kwargs, extra_field_kwargs
             )
-
-            # Create the serializer field.
+            # 实例化字段对象
             fields[field_name] = field_class(**field_kwargs)
 
-        # Add in any hidden fields.
+        # 合并隐藏字段
+        # 将需要隐藏的特殊字段加入最终字段字典
         fields.update(hidden_fields)
 
         return fields
