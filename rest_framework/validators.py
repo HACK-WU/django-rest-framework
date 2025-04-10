@@ -74,15 +74,29 @@ class UniqueValidator:
         return queryset
 
     def __call__(self, value, serializer_field):
+        """
+        执行唯一性验证逻辑
+
+        Parameters:
+            value: 待验证的字段值
+            serializer_field (rest_framework.fields.Field): 序列化器字段实例，
+                用于获取相关上下文信息（如父实例、源属性等）
+
+        Raises:
+            ValidationError: 当发现违反唯一性约束时抛出异常
+        """
         # Determine the underlying model field name. This may not be the
         # same as the serializer field name if `source=<>` is set.
         field_name = serializer_field.source_attrs[-1]
         # Determine the existing instance, if this is an update operation.
         instance = getattr(serializer_field.parent, 'instance', None)
 
+        # 构建并过滤查询集，排除当前实例（更新操作时）
         queryset = self.queryset
         queryset = self.filter_queryset(value, queryset, field_name)
         queryset = self.exclude_current_instance(queryset, instance)
+
+        # 检查是否存在冲突记录，存在则抛出验证错误
         if qs_exists(queryset):
             raise ValidationError(self.message, code='unique')
 
