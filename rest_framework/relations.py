@@ -94,29 +94,53 @@ class RelatedField(Field):
     html_cutoff_text = None
 
     def __init__(self, **kwargs):
+        """        
+        初始化关系型字段的配置参数
+
+        Args:
+            **kwargs: 关键字参数，支持以下可选参数：
+                queryset (QuerySet): 关联模型的查询集
+                html_cutoff (int): HTML下拉框显示的最大选项数量
+                html_cutoff_text (str): 当选项超过截断数量时的提示文本
+                read_only (bool): 是否设置为只读模式
+
+        注意：
+            - 必须提供 queryset、重写 get_queryset 方法或设置 read_only=True
+            - 不允许同时提供 queryset 和设置 read_only=True
+        """
+        # 处理查询集参数：优先使用传入参数，否则使用类属性默认值
         self.queryset = kwargs.pop('queryset', self.queryset)
 
+        # 配置HTML下拉框截断设置：优先使用传入参数，否则读取API全局设置
         cutoff_from_settings = api_settings.HTML_SELECT_CUTOFF
         if cutoff_from_settings is not None:
             cutoff_from_settings = int(cutoff_from_settings)
         self.html_cutoff = kwargs.pop('html_cutoff', cutoff_from_settings)
 
+        # 处理截断提示文本：优先使用传入参数，否则组合默认值和翻译文本
         self.html_cutoff_text = kwargs.pop(
             'html_cutoff_text',
             self.html_cutoff_text or _(api_settings.HTML_SELECT_CUTOFF_TEXT)
         )
+
+        # 验证查询集参数配置的合法性
         if not method_overridden('get_queryset', RelatedField, self):
+            # 当没有重写get_queryset方法时，必须提供queryset或设置read_only
             assert self.queryset is not None or kwargs.get('read_only'), (
                 'Relational field must provide a `queryset` argument, '
                 'override `get_queryset`, or set read_only=`True`.'
             )
+        # 防止同时提供queryset和设置read_only的矛盾情况
         assert not (self.queryset is not None and kwargs.get('read_only')), (
             'Relational fields should not provide a `queryset` argument, '
             'when setting read_only=`True`.'
         )
+
+        # 清理不支持的参数后调用父类初始化
         kwargs.pop('many', None)
         kwargs.pop('allow_empty', None)
         super().__init__(**kwargs)
+
 
     def __new__(cls, *args, **kwargs):
         # We override this method in order to automagically create
@@ -155,38 +179,68 @@ class RelatedField(Field):
         return super().run_validation(data)
 
     def get_queryset(self):
+        """
+        获取并处理基础查询集
+        
+        根据Django ORM的特性动态生成可重用的查询集。当原始queryset是Manager实例时，
+        通过调用.all()方法强制生成新的查询集，确保每次使用时都会重新评估查询结果。
+
+        Returns:
+            QuerySet: 处理后的查询集实例。如果是Manager类型会被转换为实际的查询集，
+                    保证后续操作使用最新的数据库状态
+        """
         queryset = self.queryset
+        
+        # 处理动态查询集的情况
+        # 当queryset是Manager实例时（常见于ModelSerializer字段），需要转换为实际查询集
+        # 这确保每次使用查询集时都会重新评估，避免缓存旧数据的问题
         if isinstance(queryset, (QuerySet, Manager)):
-            # Ensure queryset is re-evaluated whenever used.
-            # Note that actually a `Manager` class may also be used as the
-            # queryset argument. This occurs on ModelSerializer fields,
-            # as it allows us to generate a more expressive 'repr' output
-            # for the field.
-            # Eg: 'MyRelationship(queryset=ExampleModel.objects.all())'
+            # 强制生成新的查询集实例
+            # 特别注意：这里处理了将Manager转换为实际查询集的情况，这对生成准确的repr输出至关重要
+            # 例如在序列化器字段定义中 MyRelationship(queryset=ExampleModel.objects.all()) 的场景
             queryset = queryset.all()
+            
         return queryset
+
 
     def use_pk_only_optimization(self):
         return False
 
     def get_attribute(self, instance):
+        """获取模型实例的特定属性值，支持主键优化查询
+        
+        当启用主键优化且存在source_attrs时，尝试返回一个仅含主键的简化对象，
+        否则调用父类方法获取完整实例对象
+
+        Args:
+            instance (Model): 需要从中获取属性的Django模型实例对象
+
+        Returns:
+            PKOnlyObject | Model: 当优化条件满足时返回包含主键的简化对象，
+                                 否则返回父类方法获取的完整对象实例
+        """
+        # 主键优化路径：当配置启用优化且有明确属性来源路径时触发
         if self.use_pk_only_optimization() and self.source_attrs:
-            # Optimized case, return a mock object only containing the pk attribute.
+            # 使用异常抑制上下文处理属性链式获取时可能出现的异常
             with contextlib.suppress(AttributeError):
+                # 递归获取属性链的父级对象实例
                 attribute_instance = get_attribute(instance, self.source_attrs[:-1])
+                # 获取末端属性的可序列化值（可能是关系字段或方法）
                 value = attribute_instance.serializable_value(self.source_attrs[-1])
+
+                # 处理值是可调用方法的特殊情况（如relationship的get_xxx方法）
                 if is_simple_callable(value):
-                    # Handle edge case where the relationship `source` argument
-                    # points to a `get_relationship()` method on the model.
                     value = value()
 
-                # Handle edge case where relationship `source` argument points
-                # to an instance instead of a pk (e.g., a `@property`).
+                # 确保最终获取的是主键值：当属性直接返回实例时提取其pk属性
                 value = getattr(value, 'pk', value)
 
+                # 构造仅包含主键的轻量对象用于序列化优化
                 return PKOnlyObject(pk=value)
-        # Standard case, return the object instance.
+        
+        # 标准处理路径：回退到父类的属性获取逻辑
         return super().get_attribute(instance)
+
 
     def get_choices(self, cutoff=None):
         queryset = self.get_queryset()
@@ -243,6 +297,7 @@ class PrimaryKeyRelatedField(RelatedField):
     }
 
     def __init__(self, **kwargs):
+        # pk_field 需要是一个Field类型的实例，相当于可以用来对主键数据进行序列化和反序列化
         self.pk_field = kwargs.pop('pk_field', None)
         super().__init__(**kwargs)
 
