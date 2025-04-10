@@ -105,7 +105,7 @@ class RelatedField(Field):
                 read_only (bool): 是否设置为只读模式
 
         注意：
-            - 必须提供 queryset、重写 get_queryset 方法或设置 read_only=True
+            - 必须提供 queryset 或重写 get_queryset 方法或设置 read_only=True
             - 不允许同时提供 queryset 和设置 read_only=True
         """
         # 处理查询集参数：优先使用传入参数，否则使用类属性默认值
@@ -290,6 +290,9 @@ class StringRelatedField(RelatedField):
 
 
 class PrimaryKeyRelatedField(RelatedField):
+    """
+    返回关系模型的主键值
+    """
     default_error_messages = {
         'required': _('This field is required.'),
         'does_not_exist': _('Invalid pk "{pk_value}" - object does not exist.'),
@@ -324,28 +327,47 @@ class PrimaryKeyRelatedField(RelatedField):
 
 
 class HyperlinkedRelatedField(RelatedField):
+    # 该字段用于处理超链接关系，通常用于序列化器中表示资源间的关联
+    # lookup_field: 指定目标模型对象的主键字段名，默认为'pk'
     lookup_field = 'pk'
+    # view_name: 反向解析URL时使用的视图名称，需在初始化时指定
     view_name = None
 
+    # 字段验证失败时的错误消息配置
     default_error_messages = {
-        'required': _('This field is required.'),
-        'no_match': _('Invalid hyperlink - No URL match.'),
-        'incorrect_match': _('Invalid hyperlink - Incorrect URL match.'),
-        'does_not_exist': _('Invalid hyperlink - Object does not exist.'),
-        'incorrect_type': _('Incorrect type. Expected URL string, received {data_type}.'),
+        'required': _('This field is required.'),  # 字段必填校验失败
+        'no_match': _('Invalid hyperlink - No URL match.'),  # URL模式不匹配
+        'incorrect_match': _('Invalid hyperlink - Incorrect URL match.'),  # URL参数不匹配
+        'does_not_exist': _('Invalid hyperlink - Object does not exist.'),  # 目标对象不存在
+        'incorrect_type': _('Incorrect type. Expected URL string, received {data_type}.'),  # 类型错误
     }
 
     def __init__(self, view_name=None, **kwargs):
+        """
+        超链接关系字段初始化方法
+
+        Parameters:
+            view_name (str): 必需参数，用于反向生成URL的Django视图名称
+            **kwargs: 接收额外关键字参数，包括：
+                - lookup_field (str): 模型查询字段，默认使用类属性值
+                - lookup_url_kwarg (str): URLconf中使用的关键字参数，默认等同lookup_field
+                - format (str): 可选格式后缀，用于URL生成
+
+        Raises:
+            AssertionError: 当未提供view_name参数时抛出
+        """
+        # 视图名称参数校验
         if view_name is not None:
             self.view_name = view_name
         assert self.view_name is not None, 'The `view_name` argument is required.'
+
+        # 从kwargs提取配置参数
         self.lookup_field = kwargs.pop('lookup_field', self.lookup_field)
         self.lookup_url_kwarg = kwargs.pop('lookup_url_kwarg', self.lookup_field)
         self.format = kwargs.pop('format', None)
 
-        # We include this simply for dependency injection in tests.
-        # We can't add it as a class attributes or it would expect an
-        # implicit `self` argument to be passed.
+        # 注入reverse方法依赖（主要用于测试场景）
+        # 注意：不能作为类属性，避免隐式self参数传递问题
         self.reverse = reverse
 
         super().__init__(**kwargs)
@@ -389,40 +411,58 @@ class HyperlinkedRelatedField(RelatedField):
         return self.reverse(view_name, kwargs=kwargs, request=request, format=format)
 
     def to_internal_value(self, data):
+        """
+        将输入数据转换为内部表示对象
+
+        Args:
+            data: 输入数据，期望为URL字符串或可解析的路径标识符。若为绝对URL会被转换为相对路径
+
+        Returns:
+            object: 通过get_object获取的模型对象
+        """
+        # 从上下文中获取当前请求对象
         request = self.context.get('request')
+
+        # 验证输入数据类型是否为字符串(通过检查是否包含startswith方法)
         try:
             http_prefix = data.startswith(('http:', 'https:'))
         except AttributeError:
             self.fail('incorrect_type', data_type=type(data).__name__)
 
+        # 处理绝对URL转换：提取路径并移除可能的脚本前缀(如Django的FORCE_SCRIPT_NAME)
         if http_prefix:
-            # If needed convert absolute URLs to relative path
             data = parse.urlparse(data).path
             prefix = get_script_prefix()
             if data.startswith(prefix):
                 data = '/' + data[len(prefix):]
 
+        # 进行URL解码并转换为国际化URI格式
         data = uri_to_iri(parse.unquote(data))
 
+        # 解析URL路径到Django视图
         try:
             match = resolve(data)
         except Resolver404:
             self.fail('no_match')
 
+        # 获取版本化视图名称（支持API版本控制）
         try:
             expected_viewname = request.versioning_scheme.get_versioned_viewname(
                 self.view_name, request
             )
-        except AttributeError:
+        except AttributeError:  # 当没有版本控制方案时回退到基础视图名
             expected_viewname = self.view_name
 
+        # 验证解析到的视图是否与预期视图匹配
         if match.view_name != expected_viewname:
             self.fail('incorrect_match')
 
+        # 通过解析参数获取最终对象
         try:
             return self.get_object(match.view_name, match.args, match.kwargs)
         except (ObjectDoesNotExist, ObjectValueError, ObjectTypeError):
             self.fail('does_not_exist')
+
 
     def to_representation(self, value):
         assert 'request' in self.context, (
@@ -493,8 +533,15 @@ class HyperlinkedIdentityField(HyperlinkedRelatedField):
 
 class SlugRelatedField(RelatedField):
     """
-    A read-write field that represents the target of the relationship
-    by a unique 'slug' attribute.
+    通过唯一 slug 属性处理关联关系的读写字段
+    
+    该字段允许通过目标模型的唯一 slug 属性来建立关系，支持双向数据转换：
+    - 输入时通过 slug 查找关联对象
+    - 输出时将对象序列化为 slug 值
+
+    Attributes:
+        slug_field (str): 目标模型中用作 slug 的字段名，必须提供
+        default_error_messages (dict): 定义字段级别的错误消息模板
     """
     default_error_messages = {
         'does_not_exist': _('Object with {slug_name}={value} does not exist.'),
@@ -507,6 +554,22 @@ class SlugRelatedField(RelatedField):
         super().__init__(**kwargs)
 
     def to_internal_value(self, data):
+        """
+        将输入的 slug 值转换为对应的模型实例
+
+        通过 slug_field 在关联查询集中查找匹配项，处理以下异常情况：
+        - 找不到对象时触发 does_not_exist 错误
+        - 值类型错误时触发 invalid 错误
+
+        Args:
+            data (str): 输入的 slug 值
+
+        Returns:
+            Model: 查找到的模型实例
+
+        Raises:
+            ValidationError: 当查找失败或值无效时抛出
+        """
         queryset = self.get_queryset()
         try:
             return queryset.get(**{self.slug_field: data})
@@ -518,9 +581,10 @@ class SlugRelatedField(RelatedField):
     def to_representation(self, obj):
         slug = self.slug_field
         if "__" in slug:
-            # handling nested relationship if defined
+            # 转换嵌套关系语法：将 __ 替换为 . 用于属性获取
             slug = slug.replace('__', '.')
         return attrgetter(slug)(obj)
+
 
 
 class ManyRelatedField(Field):
