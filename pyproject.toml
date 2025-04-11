@@ -1,0 +1,13 @@
+[project]
+name = "django-rest-framework"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "asgiref>=3.8.1",
+    "django==5.2",
+    "mkdocs>=1.6.1",
+    "setuptools>=78.1.0",
+    "sqlparse>=0.5.3",
+]
