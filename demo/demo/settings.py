@@ -11,9 +11,12 @@ https://docs.djangoproject.com/en/dev/ref/settings/
 """
 
 from pathlib import Path
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 
 # Quick-start development settings - unsuitable for production
@@ -27,7 +30,6 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -37,6 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'app01',
+    'rest_framework',
 ]
 
 MIDDLEWARE = [
@@ -68,17 +72,19 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'demo.wsgi.application'
 
-
 # Database
 # https://docs.djangoproject.com/en/dev/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "demo",
+        "USER": "root",
+        "PASSWORD": "123456",
+        "HOST": "127.0.0.1",
+        "PORT": "3306",
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/dev/ref/settings/#auth-password-validators
@@ -98,7 +104,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/dev/topics/i18n/
 
@@ -109,7 +114,6 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 
 USE_TZ = True
-
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/dev/howto/static-files/
