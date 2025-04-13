@@ -103,30 +103,39 @@ def exception_handler(exc, context):
 
 
 class APIView(View):
+    # 视图策略配置：使用DRF默认设置，可通过类属性覆盖
+    renderer_classes = api_settings.DEFAULT_RENDERER_CLASSES    # 响应内容渲染处理器列表
+    parser_classes = api_settings.DEFAULT_PARSER_CLASSES        # 请求体解析器列表
+    authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES  # 认证策略列表
+    throttle_classes = api_settings.DEFAULT_THROTTLE_CLASSES    # 限流策略列表
+    permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES  # 权限验证策略列表
+    content_negotiation_class = api_settings.DEFAULT_CONTENT_NEGOTIATION_CLASS  # 内容协商策略
+    metadata_class = api_settings.DEFAULT_METADATA_CLASS        # 元数据生成策略
+    versioning_class = api_settings.DEFAULT_VERSIONING_CLASS    # API版本控制策略
 
-    # The following policies may be set at either globally, or per-view.
-    renderer_classes = api_settings.DEFAULT_RENDERER_CLASSES
-    parser_classes = api_settings.DEFAULT_PARSER_CLASSES
-    authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
-    throttle_classes = api_settings.DEFAULT_THROTTLE_CLASSES
-    permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
-    content_negotiation_class = api_settings.DEFAULT_CONTENT_NEGOTIATION_CLASS
-    metadata_class = api_settings.DEFAULT_METADATA_CLASS
-    versioning_class = api_settings.DEFAULT_VERSIONING_CLASS
+    # 测试辅助配置：允许通过依赖注入覆盖设置
+    settings = api_settings  # DRF全局配置实例引用
 
-    # Allow dependency injection of other settings to make testing easier.
-    settings = api_settings
-
-    schema = DefaultSchema()
+    # API文档生成配置
+    schema = DefaultSchema()  # OpenAPI架构生成器实例
 
     @classmethod
     def as_view(cls, **initkwargs):
         """
-        Store the original class on the view function.
+        将类视图转换为Django视图函数，并处理DRF特定配置
 
-        This allows us to discover information about the view when we do URL
-        reverse lookups.  Used for breadcrumb generation.
+        继承并扩展Django的View.as_view()方法，添加DRF相关配置：
+        - 防止直接评估QuerySet导致的缓存问题
+        - 存储类信息用于URL反向解析
+        - 处理中间件兼容性
+        - 设置CSRF豁免策略
+
+        :param initkwargs: 传递给父类as_view方法的初始化参数，包含URL配置参数
+        :return: 经过CSRF豁免处理的Django视图函数
+                 注意：基于会话的认证仍需CSRF校验，其他认证方式豁免
         """
+        # 防止直接访问.queryset属性导致查询结果被缓存
+        # QuerySet评估防护机制：当直接访问未评估的queryset时抛出运行时错误
         if isinstance(getattr(cls, 'queryset', None), models.query.QuerySet):
             def force_evaluation():
                 raise RuntimeError(
@@ -136,18 +145,28 @@ class APIView(View):
                 )
             cls.queryset._fetch_all = force_evaluation
 
+        # 调用父类方法创建基础视图，保留类引用和初始化参数
         view = super().as_view(**initkwargs)
-        view.cls = cls
-        view.initkwargs = initkwargs
+        view.cls = cls          # 存储视图类用于反向解析
+        view.initkwargs = initkwargs  # 保存初始化参数
 
-        # Exempt all DRF views from Django's LoginRequiredMiddleware. Users should set
-        # DEFAULT_PERMISSION_CLASSES to 'rest_framework.permissions.IsAuthenticated' instead
+        # 兼容Django 5.1+的中间件处理：豁免DRF视图的强制登录要求
+        # 推荐使用DEFAULT_PERMISSION_CLASSES进行认证控制
         if DJANGO_VERSION >= (5, 1):
             view.login_required = False
 
-        # Note: session based authentication is explicitly CSRF validated,
-        # all other authentication is CSRF exempt.
+        # CSRF处理策略：豁免非会话认证的CSRF校验
+        # 会话认证仍需通过Django的CSRF中间件保护
+        # 在DRF的APIView中豁免CSRF校验主要基于以下设计考量：
+        # 1.无状态API设计适配 DRF主要用于构建RESTful API，这类接口通常：
+        #   -使用Token/JWT/OAuth等无状态认证机制
+        #   -通过显式携带凭证（如Authorization头）进行身份验证
+        #   -不依赖浏览器Cookie维持会话状态
+        # 2. 安全机制分层：
+        #   -authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+        #   -permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
         return csrf_exempt(view)
+
 
     @property
     def allowed_methods(self):
@@ -490,32 +509,51 @@ class APIView(View):
     # be overridden.
     def dispatch(self, request, *args, **kwargs):
         """
-        `.dispatch()` is pretty much the same as Django's regular dispatch,
-        but with extra hooks for startup, finalize, and exception handling.
+        处理HTTP请求分发的核心方法，在Django标准dispatch机制基础上扩展了初始化、终结处理和异常处理逻辑
+
+        Args:
+            request: HttpRequest对象，包含请求元数据
+            *args: 位置参数，通常用于URL捕获参数
+            **kwargs: 关键字参数，通常用于URL命名捕获参数
+
+        Returns:
+            HttpResponse: 处理完成的响应对象
+
+        Note:
+            执行流程包含：请求初始化→预处理→方法分发→异常处理→响应终结
         """
+        # 存储请求参数到实例变量
         self.args = args
         self.kwargs = kwargs
+
+        # 初始化请求对象（可能添加自定义属性）
         request = self.initialize_request(request, *args, **kwargs)
         self.request = request
         self.headers = self.default_response_headers  # deprecate?
 
         try:
+            # 执行预处理流程（认证/节流/权限校验等）
             self.initial(request, *args, **kwargs)
 
-            # Get the appropriate handler method
+            # 根据HTTP方法选择对应处理函数
             if request.method.lower() in self.http_method_names:
                 handler = getattr(self, request.method.lower(),
                                   self.http_method_not_allowed)
             else:
+                # 不支持的HTTP方法处理
                 handler = self.http_method_not_allowed
 
+            # 执行具体的HTTP方法处理
             response = handler(request, *args, **kwargs)
 
         except Exception as exc:
+            # 统一异常处理（返回适当的状态码和错误信息）
             response = self.handle_exception(exc)
 
+        # 最终响应处理（内容渲染/响应头设置等）
         self.response = self.finalize_response(request, response, *args, **kwargs)
         return self.response
+
 
     def options(self, request, *args, **kwargs):
         """
