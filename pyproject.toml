@@ -17,4 +17,11 @@ dependencies = [
     "pytest>=7.0.1,<8.0",
     "setuptools>=78.1.0",
     "sqlparse>=0.5.3",
+    "ujson>=5.10.0",
 ]
+
+# uv包管理工具pip的清华源地址
+[[tool.uv.index]]
+name = "pypi"
+url="https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
