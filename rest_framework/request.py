@@ -142,42 +142,50 @@ class Request:
     Wrapper allowing to enhance a standard `HttpRequest` instance.
 
     Kwargs:
-        - request(HttpRequest). The original request instance.
-        - parsers(list/tuple). The parsers to use for parsing the
-          request content.
-        - authenticators(list/tuple). The authenticators used to try
-          authenticating the request's user.
+        request (HttpRequest): 原始请求实例，必须为django.http.HttpRequest类型
+        parsers (list/tuple, optional): 用于解析请求内容的解析器集合，默认为空元组
+        authenticators (list/tuple, optional): 用于请求用户认证的认证器集合，默认为空元组
+        negotiator (object, optional): 内容协商处理器，默认使用内置的_default_negotiator
+        parser_context (dict, optional): 解析器上下文字典，包含请求相关元数据，默认会创建包含
+            request和encoding键的基础上下文
     """
 
     def __init__(self, request, parsers=None, authenticators=None,
                  negotiator=None, parser_context=None):
+        # 强制类型校验确保request参数合法性
         assert isinstance(request, HttpRequest), (
             'The `request` argument must be an instance of '
             '`django.http.HttpRequest`, not `{}.{}`.'
             .format(request.__class__.__module__, request.__class__.__name__)
         )
 
+        # 核心属性初始化
         self._request = request
         self.parsers = parsers or ()
         self.authenticators = authenticators or ()
         self.negotiator = negotiator or self._default_negotiator()
         self.parser_context = parser_context
+        
+        # 延迟初始化占位符
         self._data = Empty
         self._files = Empty
         self._full_data = Empty
         self._content_type = Empty
         self._stream = Empty
 
+        # 构建解析器上下文
         if self.parser_context is None:
             self.parser_context = {}
         self.parser_context['request'] = self
         self.parser_context['encoding'] = request.encoding or settings.DEFAULT_CHARSET
 
+        # 处理强制认证场景
         force_user = getattr(request, '_force_auth_user', None)
         force_token = getattr(request, '_force_auth_token', None)
         if force_user is not None or force_token is not None:
             forced_auth = ForcedAuthentication(force_user, force_token)
             self.authenticators = (forced_auth,)
+
 
     def __repr__(self):
         return '<%s.%s: %s %r>' % (
@@ -296,9 +304,26 @@ class Request:
 
     def _load_stream(self):
         """
+        加载并返回请求内容体作为流对象
+
+        方法逻辑说明：
+        - 从请求META信息中解析内容长度
+        - 根据内容长度和请求状态决定返回的流对象形式
+
+        返回值：
+            io.BytesIO | django.core.handlers.wsgi.WSGIRequest | None:
+                - None: 内容长度为0时返回
+                - 原始请求对象：当内容长度非0且请求未被读取过时
+                - BytesIO对象：当请求体已被部分读取时，用内存流包装已读取的内容
+
+        异常处理：
+            捕获内容长度转换异常，将无效长度视为0处理
+        """
+        """
         Return the content body of the request, as a stream.
         """
         meta = self._request.META
+        # 解析请求头中的内容长度，处理可能的转换异常
         try:
             content_length = int(
                 meta.get('CONTENT_LENGTH', meta.get('HTTP_CONTENT_LENGTH', 0))
@@ -306,12 +331,17 @@ class Request:
         except (ValueError, TypeError):
             content_length = 0
 
+        # 根据内容长度和请求状态设置数据流
         if content_length == 0:
+            # 无内容时设置为空
             self._stream = None
         elif not self._request._read_started:
+            # 请求未被读取时使用原始请求对象作为流
             self._stream = self._request
         else:
+            # 请求已被部分读取时使用内存流包装已读取内容
             self._stream = io.BytesIO(self.body)
+
 
     def _supports_form_parsing(self):
         """
@@ -325,24 +355,36 @@ class Request:
 
     def _parse(self):
         """
-        Parse the request content, returning a two-tuple of (data, files)
+        解析请求内容并提取数据和文件
 
-        May raise an `UnsupportedMediaType`, or `ParseError` exception.
+        方法会尝试从请求流中解析内容，根据内容类型选择合适的解析器进行处理。
+        支持表单数据解析，处理中间件已访问POST的情况，并处理空流或空媒体类型的情况。
+
+        返回:
+            tuple: 包含两个元素的元组，第一个元素为解析后的数据(通常为字典或QueryDict)，
+                第二个元素为解析后的文件数据(通常为MultiValueDict)
+
+        异常:
+            UnsupportedMediaType: 当没有找到支持当前媒体类型的解析器时抛出
+            ParseError: 解析过程中发生错误时抛出
         """
+        # 获取请求的内容类型
         media_type = self.content_type
         try:
+            # 尝试获取请求体数据流
             stream = self.stream
         except RawPostDataException:
+            # 处理请求流已被读取的情况（例如中间件已处理过POST）
             if not hasattr(self._request, '_post'):
                 raise
-            # If request.POST has been accessed in middleware, and a method='POST'
-            # request was made with 'multipart/form-data', then the request stream
-            # will already have been exhausted.
+            # 当支持表单解析时直接返回已解析的表单数据
             if self._supports_form_parsing():
                 return (self._request.POST, self._request.FILES)
             stream = None
 
+        # 处理空流或未指定媒体类型的情况
         if stream is None or media_type is None:
+            # 根据媒体类型决定返回空表单数据还是普通空字典
             if media_type and is_form_media_type(media_type):
                 empty_data = QueryDict('', encoding=self._request._encoding)
             else:
@@ -350,28 +392,29 @@ class Request:
             empty_files = MultiValueDict()
             return (empty_data, empty_files)
 
+        # 根据内容协商选择合适的数据解析器
         parser = self.negotiator.select_parser(self, self.parsers)
 
+        # 没有可用解析器时抛出媒体类型不支持异常
         if not parser:
             raise exceptions.UnsupportedMediaType(media_type)
 
         try:
+            # 调用解析器进行实际的内容解析
             parsed = parser.parse(stream, media_type, self.parser_context)
         except Exception:
-            # If we get an exception during parsing, fill in empty data and
-            # re-raise.  Ensures we don't simply repeat the error when
-            # attempting to render the browsable renderer response, or when
-            # logging the request or similar.
+            # 解析失败时初始化空数据容器并重新抛出异常
             self._data = QueryDict('', encoding=self._request._encoding)
             self._files = MultiValueDict()
             self._full_data = self._data
             raise
 
-        # Parser classes may return the raw data, or a
-        # DataAndFiles object.  Unpack the result as required.
+        # 处理解析器返回结果，适配不同解析器的返回格式
         try:
+            # 标准情况：解析器返回包含data和files属性的对象
             return (parsed.data, parsed.files)
         except AttributeError:
+            # 兼容情况：解析器直接返回数据，初始化空文件字典
             empty_files = MultiValueDict()
             return (parsed, empty_files)
 
