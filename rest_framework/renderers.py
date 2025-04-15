@@ -57,34 +57,56 @@ class JSONRenderer(BaseRenderer):
     """
     Renderer which serializes to JSON.
     """
-    media_type = 'application/json'
-    format = 'json'
-    encoder_class = encoders.JSONEncoder
-    ensure_ascii = not api_settings.UNICODE_JSON
-    compact = api_settings.COMPACT_JSON
-    strict = api_settings.STRICT_JSON
+    media_type = 'application/json'  # 定义响应媒体类型
+    format = 'json'  # 格式标识符
+    encoder_class = encoders.JSONEncoder  # 使用的JSON编码器类
+    ensure_ascii = not api_settings.UNICODE_JSON  # 是否强制ASCII编码
+    compact = api_settings.COMPACT_JSON  # 是否使用紧凑格式
+    strict = api_settings.STRICT_JSON  # 是否启用严格模式(禁止NaN等)
 
-    # We don't set a charset because JSON is a binary encoding,
-    # that can be encoded as utf-8, utf-16 or utf-32.
+    # 不设置字符集，因为JSON是二进制编码，支持utf-8/16/32
     # See: https://www.ietf.org/rfc/rfc4627.txt
     # Also: http://lucumr.pocoo.org/2013/7/19/application-mimetypes-and-encodings/
     charset = None
 
     def get_indent(self, accepted_media_type, renderer_context):
+        """
+        确定JSON输出的缩进级别
+        
+        参数:
+        accepted_media_type: 客户端接受的媒体类型字符串，可能包含indent参数
+        renderer_context: 渲染器上下文字典，可能包含'indent'键
+        
+        返回值:
+        int|None - 缩进值(0-8)，None表示不缩进。处理规则：
+        1. 从媒体类型参数中解析indent值，限幅在0-8之间，0转为None
+        2. 若未找到则从上下文中获取indent配置
+        """
         if accepted_media_type:
-            # If the media type looks like 'application/json; indent=4',
-            # then pretty print the result.
-            # Note that we coerce `indent=0` into `indent=None`.
+            # 解析媒体类型中的参数
             base_media_type, params = parse_header_parameters(accepted_media_type)
             with contextlib.suppress(KeyError, ValueError, TypeError):
+                # 将indent参数转换为整数，并限制在0-8范围内，0转为None
                 return zero_as_none(max(min(int(params['indent']), 8), 0))
-        # If 'indent' is provided in the context, then pretty print the result.
-        # E.g. If we're being called by the BrowsableAPIRenderer.
         return renderer_context.get('indent', None)
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
         """
-        Render `data` into JSON, returning a bytestring.
+        将数据序列化为JSON字节流
+        
+        参数:
+        data: 需要序列化的数据对象
+        accepted_media_type: 客户端接受的媒体类型字符串
+        renderer_context: 包含渲染相关信息的上下文字典
+        
+        返回值:
+        bytes - JSON编码后的字节流
+        
+        处理流程:
+        1. 获取缩进配置
+        2. 根据配置选择合适的分隔符
+        3. 使用JSON编码器进行序列化
+        4. 处理特殊Unicode字符确保JavaScript兼容性
         """
         if data is None:
             return b''
@@ -92,19 +114,20 @@ class JSONRenderer(BaseRenderer):
         renderer_context = renderer_context or {}
         indent = self.get_indent(accepted_media_type, renderer_context)
 
+        # 根据缩进状态选择分隔符配置
         if indent is None:
             separators = SHORT_SEPARATORS if self.compact else LONG_SEPARATORS
         else:
             separators = INDENT_SEPARATORS
 
+        # 执行JSON序列化，应用所有配置参数
         ret = json.dumps(
             data, cls=self.encoder_class,
             indent=indent, ensure_ascii=self.ensure_ascii,
             allow_nan=not self.strict, separators=separators
         )
 
-        # We always fully escape \u2028 and \u2029 to ensure we output JSON
-        # that is a strict javascript subset.
+        # 转义特殊Unicode字符以确保JSON是有效的JavaScript子集
         # See: https://gist.github.com/damncabbage/623b879af56f850a6ddc
         ret = ret.replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
         return ret.encode()

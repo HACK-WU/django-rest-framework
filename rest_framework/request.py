@@ -173,13 +173,45 @@ class Request:
         self._content_type = Empty
         self._stream = Empty
 
+
         # 构建解析器上下文
+        #
         if self.parser_context is None:
             self.parser_context = {}
         self.parser_context['request'] = self
         self.parser_context['encoding'] = request.encoding or settings.DEFAULT_CHARSET
 
         # 处理强制认证场景
+        """
+        强制认证是Django REST framework中用于测试场景的特殊认证机制，主要作用如下：
+        1、设计目的
+            -专为测试客户端和请求工厂设计
+            -允许绕过常规认证流程
+            -直接注入预设的认证凭证
+        2、核心特征
+            通过设置请求对象的特殊属性激活：
+            request._force_auth_user = test_user  # 注入测试用户
+            request._force_auth_token = test_token  # 注入测试令牌
+            
+        3、通过通过中间件触发强制认证
+           # 在middleware.py中添加
+            class PostmanBypassAuthMiddleware:
+                def __init__(self, get_response):
+                    self.get_response = get_response
+            
+                def __call__(self, request):
+                    # 通过特定Header触发模拟认证
+                    if request.META.get('HTTP_X_FORCE_AUTH') == 'postman':
+                        request._force_auth_user = User.objects.get(username='postman_user')
+                        request._force_auth_token = 'postman_demo_token'
+                    return self.get_response(request)
+            
+            # settings.py配置
+            MIDDLEWARE = [
+                ...
+                'yourapp.middleware.PostmanBypassAuthMiddleware',
+            ]        
+        """
         force_user = getattr(request, '_force_auth_user', None)
         force_token = getattr(request, '_force_auth_token', None)
         if force_user is not None or force_token is not None:

@@ -34,34 +34,50 @@ class DefaultContentNegotiation(BaseContentNegotiation):
 
     def select_renderer(self, request, renderers, format_suffix=None):
         """
-        Given a request and a list of renderers, return a two-tuple of:
-        (renderer, media type).
+        根据请求和可用渲染器选择合适的渲染器及媒体类型
+
+        Args:
+            request (Request): 请求对象，用于获取查询参数和头部信息
+            renderers (list): 可用渲染器列表，包含支持的渲染器实例
+            format_suffix (str, optional): 格式后缀（如.json），来自URL路径参数
+
+        Returns:
+            tuple: 包含两个元素的元组：
+                - 选中的渲染器实例
+                - 对应的完整媒体类型字符串
+
+        Raises:
+            exceptions.NotAcceptable: 当没有可接受的渲染器时抛出
         """
-        # Allow URL style format override.  eg. "?format=json
+        # 处理格式覆盖逻辑（通过查询参数或路径后缀）
+        # 示例："?format=json" 或 URL路径中的 ".json"
         format_query_param = self.settings.URL_FORMAT_OVERRIDE
         format = format_suffix or request.query_params.get(format_query_param)
 
+        # 根据格式参数过滤可用渲染器
         if format:
             renderers = self.filter_renderers(renderers, format)
 
+        # 获取客户端支持的Accept媒体类型列表
         accepts = self.get_accept_list(request)
 
-        # Check the acceptable media types against each renderer,
-        # attempting more specific media types first
-        # NB. The inner loop here isn't as bad as it first looks :)
-        #     Worst case is we're looping over len(accept_list) * len(self.renderers)
+        # 按优先级顺序遍历所有Accept媒体类型配置
+        # 优先匹配更具体的媒体类型（如application/json优先于*/*）
         for media_type_set in order_by_precedence(accepts):
+            # 遍历每个渲染器及其支持的媒体类型
             for renderer in renderers:
                 for media_type in media_type_set:
+                    # 检查当前渲染器是否匹配客户端要求的媒体类型
                     if media_type_matches(renderer.media_type, media_type):
-                        # Return the most specific media type as accepted.
+                        # 处理媒体类型参数优先级（如q值、版本参数等）
                         media_type_wrapper = _MediaType(media_type)
+                        
+                        # 当渲染器的媒体类型比客户端要求的更具体时
                         if (
                             _MediaType(renderer.media_type).precedence >
                             media_type_wrapper.precedence
                         ):
-                            # Eg client requests '*/*'
-                            # Accepted media type is 'application/json'
+                            # 组合基础媒体类型和客户端参数（如保持indent=8参数）
                             full_media_type = ';'.join(
                                 (renderer.media_type,) +
                                 tuple(
@@ -71,11 +87,12 @@ class DefaultContentNegotiation(BaseContentNegotiation):
                             )
                             return renderer, full_media_type
                         else:
-                            # Eg client requests 'application/json; indent=8'
-                            # Accepted media type is 'application/json; indent=8'
+                            # 直接使用客户端提供的完整媒体类型
                             return renderer, media_type
 
+        # 没有找到符合Accept头要求的渲染器时抛出异常
         raise exceptions.NotAcceptable(available_renderers=renderers)
+
 
     def filter_renderers(self, renderers, format):
         """

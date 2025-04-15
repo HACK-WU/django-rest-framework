@@ -180,6 +180,14 @@ class APIView(View):
         headers = {
             'Allow': ', '.join(self.allowed_methods),
         }
+        
+        # Vary 响应头是 HTTP 缓存机制中的关键控制字段，主要作用如下：
+        # 缓存版本控制 当存在多个响应格式时（如 JSON/XML/HTML），
+        # 通过 Vary: Accept 告知缓存系统：不同 Accept 头值的请求应被视作独立资源。
+        # 例如：
+        #   Accept: application/json → 缓存 JSON 版本
+        #   Accept: text/html → 缓存 HTML 版本
+
         if len(self.renderer_classes) > 1:
             headers['Vary'] = 'Accept'
         return headers
@@ -326,27 +334,55 @@ class APIView(View):
 
     def perform_content_negotiation(self, request, force=False):
         """
-        Determine which renderer and media type to use render the response.
+        执行内容协商以确定响应使用的渲染器和媒体类型
+
+        参数:
+        - request: Request 
+            当前的HTTP请求对象，用于提取内容协商所需的头部信息
+        - force: bool (默认False)
+            协商失败时是否强制返回默认渲染器。当True时，异常情况下返回第一个可用渲染器
+
+        返回值:
+        - tuple: (renderer, media_type)
+            选中的渲染器实例及其对应的媒体类型字符串
+
+        异常:
+        - 允许底层异常向上传播，除非force=True时返回默认值代替抛出异常
         """
+        # 获取当前配置的可用渲染器列表
         renderers = self.get_renderers()
+        # 获取内容协商器实例（处理Accept头等协商逻辑）
         conneg = self.get_content_negotiator()
 
         try:
+            # 核心协商逻辑：根据请求头选择最适合的渲染器
             return conneg.select_renderer(request, renderers, self.format_kwarg)
         except Exception:
+            # 强制返回策略：返回第一个可用渲染器及其媒体类型
             if force:
                 return (renderers[0], renderers[0].media_type)
             raise
 
+
     def perform_authentication(self, request):
         """
-        Perform authentication on the incoming request.
+        显式执行请求的身份验证流程
 
-        Note that if you override this and simply 'pass', then authentication
-        will instead be performed lazily, the first time either
-        `request.user` or `request.auth` is accessed.
+        该方法通过访问request.user属性主动触发DRF的认证机制。当需要确保在视图处理前
+        完成认证时，应当调用此方法。若子类重写本方法为空实现(pass)，认证将被延迟到首次
+        访问request.user或request.auth属性时执行。
+
+        参数：
+            request : Request
+                DRF请求对象，包含需要验证的身份信息。实际是Django HttpRequest实例的扩展
+
+        注意：
+            - 显式调用认证有利于提前验证失败时快速返回401响应
+            - 延迟认证适用于认证非必须或需要惰性验证的场景
+            - 该方法不直接返回结果，认证结果将存储在request.user和request.auth属性中
         """
         request.user
+
 
     def check_permissions(self, request):
         """
@@ -423,48 +459,77 @@ class APIView(View):
 
     def initial(self, request, *args, **kwargs):
         """
-        Runs anything that needs to occur prior to calling the method handler.
+        在调用方法处理程序前执行初始化操作
+        
+        参数:
+        request: HttpRequest对象，接收到的HTTP请求
+        *args: 可变位置参数，将传递给方法处理程序
+        **kwargs: 可变关键字参数，包含URL路径参数等
+        
+        返回值:
+        None
         """
+        # 从kwargs获取并设置格式后缀（如.json/.api）
         self.format_kwarg = self.get_format_suffix(**kwargs)
 
-        # Perform content negotiation and store the accepted info on the request
+        # 内容协商：确定客户端接受的响应格式和媒体类型
         neg = self.perform_content_negotiation(request)
         request.accepted_renderer, request.accepted_media_type = neg
 
-        # Determine the API version, if versioning is in use.
+        # 版本控制：解析请求中的API版本信息
         version, scheme = self.determine_version(request, *args, **kwargs)
         request.version, request.versioning_scheme = version, scheme
 
-        # Ensure that the incoming request is permitted
+        # 请求安全验证三部曲：
+        # 1. 身份认证（确认用户身份）
+        # 2. 权限检查（验证访问权限）
+        # 3. 流量控制（检查请求频率限制）
         self.perform_authentication(request)
         self.check_permissions(request)
         self.check_throttles(request)
 
+
     def finalize_response(self, request, response, *args, **kwargs):
         """
-        Returns the final response object.
+        处理并返回最终的HTTP响应对象
+
+        Args:
+            request (Request): Django请求对象，包含请求相关元数据
+            response (HttpResponseBase): 视图返回的原始响应对象，需为合法响应类型
+            *args: 可变位置参数，用于传递额外参数
+            **kwargs: 可变关键字参数，用于传递额外参数
+
+        Returns:
+            HttpResponseBase: 处理完成的响应对象，包含协商的渲染器和响应头信息
+
+        Raises:
+            AssertionError: 当响应对象类型不符合预期时抛出异常
         """
-        # Make the error obvious if a proper response is not returned
+        # 强制校验响应对象类型合法性
         assert isinstance(response, HttpResponseBase), (
             'Expected a `Response`, `HttpResponse` or `StreamingHttpResponse` '
             'to be returned from the view, but received a `%s`'
             % type(response)
         )
 
+        # 对DRF Response对象进行渲染前准备
         if isinstance(response, Response):
+            # 强制执行内容协商获取渲染器
             if not getattr(request, 'accepted_renderer', None):
                 neg = self.perform_content_negotiation(request, force=True)
                 request.accepted_renderer, request.accepted_media_type = neg
 
+            # 注入协商结果到响应对象
             response.accepted_renderer = request.accepted_renderer
             response.accepted_media_type = request.accepted_media_type
             response.renderer_context = self.get_renderer_context()
 
-        # Add new vary headers to the response instead of overwriting.
+        # 合并Vary头部处理（保留原有Vary头）
         vary_headers = self.headers.pop('Vary', None)
         if vary_headers is not None:
             patch_vary_headers(response, cc_delim_re.split(vary_headers))
 
+        # 将类级别headers合并到响应对象
         for key, value in self.headers.items():
             response[key] = value
 

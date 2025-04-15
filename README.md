@@ -6,4 +6,5 @@
 # 目录
 * [serializer序列化器](docs/diagram/Serializer.md)
 * [DRf全局默认配置信息](docs/other.md)
+* [Views视图执行流程](docs/diagram/Views.md)
 
