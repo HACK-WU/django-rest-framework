@@ -45,3 +45,97 @@ sequenceDiagram
     B-->>A: response
 ```
 
+
+
+## GenericAPIView 获取单个数据
+
+```mermaid
+sequenceDiagram
+    participant A as 客户端
+    participant B as GenericAPIView
+    participant C as QuerySet 
+    participant F as Filter<br>过滤器
+    participant E as Permissions<br>权限
+    participant D as Serializer<br>序列化器
+    
+
+    A->>B: get_object
+    B->>C: get_queryset
+    C-->>B: return queryset
+    B->>F: filter_queryset(queryset)
+    F-->>B: return queryset
+    B->>B: obj=get_object_or_404<br>获取到单个obj 
+    B->>E: check_object_permissions(obj)
+    B-->>A: return obj
+
+    A->>B:get_serilizer
+    B->>D: get_serializer_class
+    D-->>B: return serializer_class
+    B->>B: get_serializer_context<br>获取上下文内容
+    B-->>A: return serializer_instance<br>序列化器实例
+
+    A-->>A: serializer_instance(obj).data<br>序列化数据，并获取结果
+
+```
+
+
+
+## RetrieveModelViewSet(RetrieveModelMixin,GenericViewSet)
+
+```mermaid
+sequenceDiagram
+    participant D as 客户端
+    participant A as RetrieveModelMixin
+    participant B as GenericAPIView
+  
+
+    D->>A: 发起请求GET,获取单个数据
+    A->>B: get_object
+    B-->>A: return obj
+    A->>B:get_serilizer
+    B-->>A: return serializer_instance<br>序列化器实例
+    A-->>D: return  serializer_instance(obj).data<br>序列化数据，并获取结果
+
+
+
+
+
+
+
+
+```
+
+## ListModelViewSer(ListModelMixin,GenericViewSet)
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant A as ListModelMixin
+    participant B as GenericAPIView 
+    participant F as Pagination<br>分页器
+
+    
+    C->>A: 发情请求GET
+    A->>B: filter_queryset(get_queryset())
+    B-->>A: return queryset
+    A->>B: paginate_queryset(queryset)
+
+    B->>F: pagination_class()<br>获取分页器
+    F-->>B: retrun paginator
+    B->>B: page=paginate_queryset(queryset)<br>执行分页
+    B-->>A: return page
+
+    
+  
+    critical 分页数据是否存在
+        A->>A: page is None?
+    
+    option No 分页成功
+       A->>B: get_serializer(page, many=True)
+    option Yes 分页失败
+        A->>B: get_serializer(queryset, many=True)
+    end
+    B-->>A: return serializer
+    A-->>C: return serializer.data
+```
+

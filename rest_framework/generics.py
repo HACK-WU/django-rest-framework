@@ -144,12 +144,34 @@ class GenericAPIView(views.APIView):
 
     def get_serializer(self, *args, **kwargs):
         """
-        Return the serializer instance that should be used for validating and
-        deserializing input, and for serializing output.
+        获取并初始化序列化器实例
+        
+        该方法负责创建并返回用于数据验证、反序列化输入和序列化输出的序列化器对象。
+        继承自GenericAPIView，是DRF视图类的核心方法之一。
+
+        Args:
+            *args: 可变位置参数，将直接传递给序列化器的构造函数
+            **kwargs: 可变关键字参数，将直接传递给序列化器的构造函数。
+                    会自动添加上下文(context)参数，若未显式指定则使用视图的默认上下文
+
+        Returns:
+            serializer_instance (Serializer): 初始化后的序列化器实例，包含视图上下文信息
+
+        实现逻辑：
+            1. 通过视图配置获取序列化器类
+            2. 设置序列化器所需的上下文信息
+            3. 实例化并返回配置好的序列化器
         """
+        # 从视图类配置中获取具体的序列化器类（通过get_serializer_class方法）
         serializer_class = self.get_serializer_class()
+        
+        # 自动添加序列化器上下文（默认包含request、view、format等信息）
+        # setdefault确保不覆盖调用方显式传入的context参数
         kwargs.setdefault('context', self.get_serializer_context())
+        
+        # 实例化序列化器对象并返回，传递所有参数和关键字参数
         return serializer_class(*args, **kwargs)
+
 
     def get_serializer_class(self):
         """
@@ -195,29 +217,74 @@ class GenericAPIView(views.APIView):
     @property
     def paginator(self):
         """
-        The paginator instance associated with the view, or `None`.
+        获取与视图关联的分页器实例(延迟初始化)
+        
+        该方法实现分页器的懒加载模式，仅在首次访问时进行初始化。根据视图类中配置的
+        pagination_class 决定是否启用分页功能。如果未配置分页类，则始终返回None。
+        
+        Returns:
+            paginator: 当视图配置了pagination_class时，返回对应的分页器实例；
+                     未配置时返回None
+        
+        实现特性:
+        1. 使用实例缓存(_paginator)避免重复创建分页器
+        2. 通过hasattr检查实现属性延迟初始化
+        3. 实际分页器对象在首次访问时动态创建
         """
         if not hasattr(self, '_paginator'):
+            # 分页配置检查与初始化逻辑
             if self.pagination_class is None:
                 self._paginator = None
             else:
+                # 使用配置的分页类实例化分页器
                 self._paginator = self.pagination_class()
         return self._paginator
 
+
     def paginate_queryset(self, queryset):
         """
-        Return a single page of results, or `None` if pagination is disabled.
+        对查询集进行分页处理，返回分页后的单页数据或当分页未启用时返回 `None`
+
+        Args:
+            queryset: 需要分页处理的原始查询集对象
+                (类型: Django QuerySet 对象)
+            self: 分页处理器实例，包含分页配置和请求上下文
+                (隐式参数，通过类实例自动传递)
+
+        Returns:
+            当启用分页时，返回包含分页结果的页面对象；
+            当分页器未配置(self.paginator为None)时返回None
+            (返回类型: Page对象 或 None)
+
+        实现说明:
+            通过检查实例的分页器状态，决定直接返回空值还是委托分页器进行实际的分页操作
         """
         if self.paginator is None:
             return None
         return self.paginator.paginate_queryset(queryset, self.request, view=self)
 
+
     def get_paginated_response(self, data):
         """
-        Return a paginated style `Response` object for the given output data.
+        生成并返回分页格式的响应对象
+        
+        该方法将输出数据委托给关联的分页器(paginator)处理，最终返回符合REST框架标准的分页响应结构。
+        调用前必须确保分页器实例已正确初始化。
+
+        Args:
+            data: 需要被分页的序列化数据集，通常来自序列化器的.data属性
+
+        Returns:
+            Response: 包含分页元数据(当前页/总数等)和分页数据的DRF响应对象
+
+        Raises:
+            AssertionError: 当paginator属性未初始化时抛出
         """
+        # 确保分页器实例已正确初始化
         assert self.paginator is not None
+        # 委托给分页器生成标准分页响应结构
         return self.paginator.get_paginated_response(data)
+
 
 
 # Concrete view classes that provide method handlers
