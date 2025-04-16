@@ -92,7 +92,7 @@ sequenceDiagram
     D->>A: 发起请求GET,获取单个数据
     A->>B: get_object
     B-->>A: return obj
-    A->>B:get_serilizer
+    A->>B:get_serialaizer
     B-->>A: return serializer_instance<br>序列化器实例
     A-->>D: return  serializer_instance(obj).data<br>序列化数据，并获取结果
 
@@ -105,37 +105,32 @@ sequenceDiagram
 
 ```
 
-## ListModelViewSer(ListModelMixin,GenericViewSet)
+## ListModelViewSet(ListModelMixin,GenericViewSet)
 
 ```mermaid
 sequenceDiagram
     participant C as 客户端
     participant A as ListModelMixin
-    participant B as GenericAPIView 
+    participant B as GenericAPIView
     participant F as Pagination<br>分页器
+    C ->> A: 发情请求GET
+    A ->> B: filter_queryset(get_queryset())
+    B -->> A: return queryset
+    A ->> B: paginate_queryset(queryset)
+    B ->> F: pagination_class()<br>获取分页器
+    F -->> B: return paginator
+    B ->> B: page=paginate_queryset(queryset)<br>执行分页
+    B -->> A: return page
 
-    
-    C->>A: 发情请求GET
-    A->>B: filter_queryset(get_queryset())
-    B-->>A: return queryset
-    A->>B: paginate_queryset(queryset)
-
-    B->>F: pagination_class()<br>获取分页器
-    F-->>B: retrun paginator
-    B->>B: page=paginate_queryset(queryset)<br>执行分页
-    B-->>A: return page
-
-    
-  
     critical 分页数据是否存在
-        A->>A: page is None?
-    
+        A ->> A: page is None?
+
     option No 分页成功
-       A->>B: get_serializer(page, many=True)
+        A ->> B: get_serializer(page, many=True)
     option Yes 分页失败
-        A->>B: get_serializer(queryset, many=True)
+        A ->> B: get_serializer(queryset, many=True)
     end
-    B-->>A: return serializer
-    A-->>C: return serializer.data
+    B -->> A: return serializer
+    A -->> C: return serializer.data
 ```
 
