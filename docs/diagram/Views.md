@@ -24,7 +24,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant  A as Django request请求处理 
+    participant  A as 主线程 
     participant  B as dispatch
     participant  C as Initial
     participant  D as class Request<br>drf中的request对象
@@ -51,7 +51,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant A as 客户端
+    participant A as 主线程
     participant B as GenericAPIView
     participant C as QuerySet 
     participant F as Filter<br>过滤器
