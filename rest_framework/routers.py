@@ -47,20 +47,27 @@ def flatten(list_of_lists):
 
 class BaseRouter:
     def __init__(self):
+        """初始化路由注册表。
+
+        初始化一个空列表用于存储路由注册信息，该列表将保存
+        (prefix, viewset, basename)元组。
+        """
         self.registry = []
 
     def register(self, prefix, viewset, basename=None):
         if basename is None:
             basename = self.get_default_basename(viewset)
 
+        # 检查basename唯一性，避免重复注册
         if self.is_already_registered(basename):
             msg = (f'Router with basename "{basename}" is already registered. '
                    f'Please provide a unique basename for viewset "{viewset}"')
             raise ImproperlyConfigured(msg)
 
+        # 将路由信息添加到注册表
         self.registry.append((prefix, viewset, basename))
 
-        # invalidate the urls cache
+        # 清除URL缓存以确保下次生成最新URL配置
         if hasattr(self, '_urls'):
             del self._urls
 
@@ -92,8 +99,16 @@ class BaseRouter:
 
 class SimpleRouter(BaseRouter):
 
+    # 定义ViewSet的默认路由配置列表
+    # 包含基础CRUD路由和动态扩展路由两种类型，用于自动生成URL模式
+    # 每个路由项定义了URL路径模板、HTTP方法映射、路由名称模板及附加参数
     routes = [
-        # List route.
+        # 基础列表路由配置
+        # 处理集合资源的基础操作：
+        # - GET: 获取资源列表（映射到list方法）
+        # - POST: 创建新资源（映射到create方法）
+        # URL模板：前缀+可选斜杠（如 /api/resource/）
+        # 路由名称格式：{basename}-list（如 user-list）
         Route(
             url=r'^{prefix}{trailing_slash}$',
             mapping={
@@ -104,15 +119,24 @@ class SimpleRouter(BaseRouter):
             detail=False,
             initkwargs={'suffix': 'List'}
         ),
-        # Dynamically generated list routes. Generated using
-        # @action(detail=False) decorator on methods of the viewset.
+        # 动态列表路由配置
+        # 处理使用@action(detail=False)装饰器声明的扩展操作
+        # URL模板：前缀/扩展路径/（如 /api/resource/custom_action/）
+        # 路由名称格式：{basename}-{url_name}（如 user-custom_action）
         DynamicRoute(
             url=r'^{prefix}/{url_path}{trailing_slash}$',
             name='{basename}-{url_name}',
             detail=False,
             initkwargs={}
         ),
-        # Detail route.
+        # 基础详情路由配置
+        # 处理单个资源的基础操作：
+        # - GET: 获取单个资源（retrieve）
+        # - PUT: 全量更新（update）
+        # - PATCH: 部分更新（partial_update）
+        # - DELETE: 删除资源（destroy）
+        # URL模板：前缀/主键/（如 /api/resource/123/）
+        # 路由名称格式：{basename}-detail（如 user-detail）
         Route(
             url=r'^{prefix}/{lookup}{trailing_slash}$',
             mapping={
@@ -125,8 +149,10 @@ class SimpleRouter(BaseRouter):
             detail=True,
             initkwargs={'suffix': 'Instance'}
         ),
-        # Dynamically generated detail routes. Generated using
-        # @action(detail=True) decorator on methods of the viewset.
+        # 动态详情路由配置
+        # 处理使用@action(detail=True)装饰器声明的扩展操作
+        # URL模板：前缀/主键/扩展路径/（如 /api/resource/123/custom_action/）
+        # 路由名称格式：{basename}-{url_name}（如 user-custom_action）
         DynamicRoute(
             url=r'^{prefix}/{lookup}/{url_path}{trailing_slash}$',
             name='{basename}-{url_name}',
@@ -136,20 +162,56 @@ class SimpleRouter(BaseRouter):
     ]
 
     def __init__(self, trailing_slash=True, use_regex_path=True):
+        """
+        初始化路由配置实例
+        
+        参数:
+            trailing_slash (bool): 是否在路径末尾添加斜杠。若为True，则路径末尾会自动添加'/'。
+            use_regex_path (bool): 是否使用正则表达式路径匹配。若为True，则使用re_path进行路径匹配；
+                                   否则使用普通路径匹配。
+        
+        返回值:
+            None: 构造函数无返回值
+        """
+        # 配置路径斜杠后缀和路径匹配模式
         self.trailing_slash = '/' if trailing_slash else ''
         self._use_regex = use_regex_path
+        
+        # 根据路径匹配模式选择不同的配置
         if use_regex_path:
+            """
+            正则表达式路径模式配置：
+            - _base_pattern: 正则分组命名模式
+            - _default_value_pattern: 默认正则匹配规则（非斜杠和点的字符）
+            - _url_conf: 使用re_path进行路径匹配
+            """
+            # url = r'^users/(?P<user_id>\d+)$'
+            # 匹配 "/users/123" → user_id="123"
+            # {lookup_prefix}{lookup_url_kwarg} 是查找的键
+            # lookup_value 是查找的值，在这里就是正则表达式
             self._base_pattern = '(?P<{lookup_prefix}{lookup_url_kwarg}>{lookup_value})'
             self._default_value_pattern = '[^/.]+'
             self._url_conf = re_path
         else:
+            """
+            普通路径模式配置：
+            - _base_pattern: 普通路径参数占位符格式
+            - _default_value_pattern: 默认参数类型转换器
+            - _url_conf: 使用path进行路径匹配
+            
+            后续处理：移除路由中的正则表达式锚点符号
+            """
+            # url = 'users/<int:user_id>'
+            # 匹配 "/users/123" → user_id=123（整数类型）
             self._base_pattern = '<{lookup_value}:{lookup_prefix}{lookup_url_kwarg}>'
             self._default_value_pattern = 'str'
             self._url_conf = path
-            # remove regex characters from routes
+            
+            # 清理路由中的正则表达式锚点符号
             _routes = []
             for route in self.routes:
                 url_param = route.url
+                # 移除正则表达式的起始和结束锚点
                 if url_param[0] == '^':
                     url_param = url_param[1:]
                 if url_param[-1] == '$':
@@ -175,16 +237,21 @@ class SimpleRouter(BaseRouter):
 
     def get_routes(self, viewset):
         """
-        Augment `self.routes` with any dynamically generated routes.
+        增强 self.routes 列表，添加动态生成的路由条目。
 
-        Returns a list of the Route namedtuple.
+        参数:
+            viewset: 视图集实例，用于获取额外的自定义动作
+
+        返回值:
+            Route命名元组列表，包含原始路由和新生成的动态路由
         """
-        # converting to list as iterables are good for one pass, known host needs to be checked again and again for
-        # different functions.
+        # 将已知路由的动作映射展平为列表形式
+        # 用于后续检查自定义动作是否存在命名冲突
         known_actions = list(flatten([route.mapping.values() for route in self.routes if isinstance(route, Route)]))
         extra_actions = viewset.get_extra_actions()
 
-        # checking action names against the known actions list
+        # 检查自定义动作是否与现有路由冲突
+        # 若存在重复命名则抛出配置异常
         not_allowed = [
             action.__name__ for action in extra_actions
             if action.__name__ in known_actions
@@ -194,10 +261,12 @@ class SimpleRouter(BaseRouter):
                    'methods, as they are existing routes: %s')
             raise ImproperlyConfigured(msg % ', '.join(not_allowed))
 
-        # partition detail and list actions
+        # 将额外动作分为详情视图和列表视图两类
         detail_actions = [action for action in extra_actions if action.detail]
         list_actions = [action for action in extra_actions if not action.detail]
 
+        # 根据路由类型生成动态路由
+        # DynamicRoute条目会根据动作类型生成具体路径
         routes = []
         for route in self.routes:
             if isinstance(route, DynamicRoute) and route.detail:
@@ -210,11 +279,29 @@ class SimpleRouter(BaseRouter):
         return routes
 
     def _get_dynamic_route(self, route, action):
+        """
+        生成动态路由配置，合并初始化参数并替换URL模板中的占位符
+
+        @action(detail=True, url_path='activate', methods=['post'])
+        def activate_user(self, request, *args, **kwargs):
+            pass
+        会生成类似 /users/123/activate/ 的 URL。
+
+        参数:
+            route: 原始路由对象，包含基础URL模板、名称模板和初始化参数
+            action: 动作对象，包含动态URL路径、HTTP方法映射和动态参数
+            
+        返回值:
+            Route: 新生成的路由实例，包含动态替换后的URL、名称和合并参数
+        """
+        # 合并基础参数与动作参数（优先级：action.kwargs > route.initkwargs）
         initkwargs = route.initkwargs.copy()
         initkwargs.update(action.kwargs)
 
+        # 转义动态URL路径中的大括号，防止与格式化占位符冲突
         url_path = escape_curly_brackets(action.url_path)
 
+        # 创建新路由实例，替换URL和名称模板中的动态部分
         return Route(
             url=route.url.replace('{url_path}', url_path),
             mapping=action.mapping,
@@ -237,26 +324,44 @@ class SimpleRouter(BaseRouter):
 
     def get_lookup_regex(self, viewset, lookup_prefix=''):
         """
-        Given a viewset, return the portion of URL regex that is used
-        to match against a single instance.
-
-        Note that lookup_prefix is not used directly inside REST rest_framework
-        itself, but is required in order to nicely support nested router
-        implementations, such as drf-nested-routers.
-
-        https://github.com/alanjds/drf-nested-routers
+        生成用于匹配单个实例的URL正则表达式片段
+        
+        参数:
+            viewset: 视图集实例，需包含lookup_field、lookup_url_kwarg等属性
+            lookup_prefix: 查找前缀字符串，用于支持嵌套路由器的路径拼接
+            
+        返回值:
+            str: 格式化的URL正则表达式字符串，包含以下替换参数：
+                {lookup_prefix}: 嵌套路由前缀
+                {lookup_url_kwarg}: URL关键字参数名称
+                {lookup_value}: 主键值匹配正则表达式
+                
+        功能说明:
+            1. 优先使用视图集定义的lookup_field（默认'pk'）作为查找字段
+            2. 支持通过lookup_url_kwarg自定义URL参数名称
+            3. 提供两种值匹配模式：
+               - 非正则模式：使用lookup_value_converter进行类型转换
+               - 正则模式：通过lookup_value_regex定义匹配规则（默认'[0-9]+'）
+            4. 返回的正则片段遵循以下格式：
+               r'{lookup_prefix}(?P<{lookup_url_kwarg}>{lookup_value})'
         """
         # Use `pk` as default field, unset set.  Default regex should not
         # consume `.json` style suffixes and should break at '/' boundaries.
         lookup_field = getattr(viewset, 'lookup_field', 'pk')
         lookup_url_kwarg = getattr(viewset, 'lookup_url_kwarg', None) or lookup_field
         lookup_value = None
+        
+        # 处理非正则模式下的值转换器获取逻辑
         if not self._use_regex:
             # try to get a more appropriate attribute when not using regex
             lookup_value = getattr(viewset, 'lookup_value_converter', None)
+        
+        # 回退到正则模式处理（兼容旧版实现）
         if lookup_value is None:
             # fallback to legacy
             lookup_value = getattr(viewset, 'lookup_value_regex', self._default_value_pattern)
+        
+        # 使用基础模板生成最终正则表达式
         return self._base_pattern.format(
             lookup_prefix=lookup_prefix,
             lookup_url_kwarg=lookup_url_kwarg,
@@ -265,32 +370,40 @@ class SimpleRouter(BaseRouter):
 
     def get_urls(self):
         """
-        Use the registered viewsets to generate a list of URL patterns.
+        根据注册的ViewSet生成URL模式列表。
+
+        参数:
+            self: 当前对象实例，需包含以下属性:
+                - registry: 注册的ViewSet列表，每个元素为(prefix, viewset, basename)
+                - trailing_slash: 是否在URL末尾添加斜杠的布尔值
+                - _url_conf: 用于生成URL配置的函数（如path或re_path）
+        
+        返回:
+            list: 包含生成的URL模式的列表，每个元素为_url_conf生成的URL配置对象
         """
         ret = []
 
+        # 遍历所有注册的ViewSet进行URL模式生成
         for prefix, viewset, basename in self.registry:
             lookup = self.get_lookup_regex(viewset)
             routes = self.get_routes(viewset)
 
+            # 处理当前ViewSet的所有路由规则
             for route in routes:
 
-                # Only actions which actually exist on the viewset will be bound
+                # 获取实际存在的视图动作映射关系
                 mapping = self.get_method_map(viewset, route.mapping)
                 if not mapping:
                     continue
 
-                # Build the url pattern
+                # 构建带格式替换的URL正则表达式
                 regex = route.url.format(
                     prefix=prefix,
                     lookup=lookup,
                     trailing_slash=self.trailing_slash
                 )
 
-                # If there is no prefix, the first part of the url is probably
-                #   controlled by project's urls.py and the router is in an app,
-                #   so a slash in the beginning will (A) cause Django to give
-                #   warnings and (B) generate URLS that will require using '//'.
+                # 特殊处理无前缀情况下的URL路径规范性问题
                 if not prefix:
                     if self._url_conf is path:
                         if regex[0] == '/':
@@ -298,12 +411,14 @@ class SimpleRouter(BaseRouter):
                     elif regex[:2] == '^/':
                         regex = '^' + regex[2:]
 
+                # 合并路由初始化参数与基础参数
                 initkwargs = route.initkwargs.copy()
                 initkwargs.update({
                     'basename': basename,
                     'detail': route.detail,
                 })
 
+                # 创建视图实例并生成最终URL配置
                 view = viewset.as_view(mapping, **initkwargs)
                 name = route.name.format(basename=basename)
                 ret.append(self._url_conf(regex, view, name=name))
