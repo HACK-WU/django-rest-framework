@@ -379,6 +379,23 @@ class Request:
         """
         Return True if this requests supports parsing form data.
         """
+        # 1.application/x-www-form-urlencoded 格式数据示例
+        # POST /api/submit/ HTTP/1.1
+        # Content-Type: application/x-www-form-urlencoded
+        #
+        # username=admin&password=123456
+
+        # 2.multipart/form-data 格式数据示例
+        # POST /api/upload/ HTTP/1.1
+        # Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+        #
+        # ------WebKitFormBoundary
+        # Content-Disposition: form-data; name="file"; filename="example.txt"
+        # Content-Type: text/plain
+        #
+        # This is an example file.<文件二进制内容>
+        # ------WebKitFormBoundary--
+
         form_media = (
             'application/x-www-form-urlencoded',
             'multipart/form-data'
