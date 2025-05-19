@@ -111,40 +111,43 @@ class BasicAuthentication(BaseAuthentication):
 
 class SessionAuthentication(BaseAuthentication):
     """
-    Use Django's session framework for authentication.
+    使用Django的会话框架进行身份验证。
     """
 
     def authenticate(self, request):
         """
-        Returns a `User` if the request session currently has a logged in user.
-        Otherwise returns `None`.
+        如果请求会话当前有登录用户，则返回一个`User`实例。
+        否则返回`None`。
         """
 
-        # Get the session-based user from the underlying HttpRequest object
+        # 从底层HttpRequest对象获取会话用户
         user = getattr(request._request, 'user', None)
 
-        # Unauthenticated, CSRF validation not required
+        # 未认证用户，无需进行CSRF验证
         if not user or not user.is_active:
             return None
 
+        # 执行CSRF验证
         self.enforce_csrf(request)
 
-        # CSRF passed with authenticated user
+        # CSRF验证通过，返回认证用户
         return (user, None)
 
     def enforce_csrf(self, request):
         """
-        Enforce CSRF validation for session based authentication.
+        对基于会话的身份验证强制进行CSRF验证。
         """
         def dummy_get_response(request):  # pragma: no cover
             return None
 
+        # 初始化CSRF检查对象
         check = CSRFCheck(dummy_get_response)
-        # populates request.META['CSRF_COOKIE'], which is used in process_view()
+        # 填充request.META['CSRF_COOKIE']，用于process_view()
         check.process_request(request)
+        # 进行CSRF检查
         reason = check.process_view(request, None, (), {})
         if reason:
-            # CSRF failed, bail with explicit error message
+            # CSRF验证失败，抛出明确的错误信息
             raise exceptions.PermissionDenied('CSRF Failed: %s' % reason)
 
 
