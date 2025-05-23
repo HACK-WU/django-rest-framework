@@ -136,8 +136,19 @@ class SessionAuthentication(BaseAuthentication):
     def enforce_csrf(self, request):
         """
         对基于会话的身份验证强制进行CSRF验证。
+
+        参数:
+        - request: 请求对象，用于CSRF验证。
+
+        此方法确保每个基于会话的请求都通过CSRF令牌进行验证，以防止跨站请求伪造攻击。
+        如果CSRF验证失败，将抛出PermissionDenied异常，阻止请求的进一步处理。
         """
         def dummy_get_response(request):  # pragma: no cover
+            """
+            伪造的响应获取函数。
+
+            此函数仅用于CSRF检查，并不实际返回任何响应。
+            """
             return None
 
         # 初始化CSRF检查对象
@@ -149,7 +160,6 @@ class SessionAuthentication(BaseAuthentication):
         if reason:
             # CSRF验证失败，抛出明确的错误信息
             raise exceptions.PermissionDenied('CSRF Failed: %s' % reason)
-
 
 class TokenAuthentication(BaseAuthentication):
     """
