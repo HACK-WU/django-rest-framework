@@ -185,9 +185,14 @@ class DjangoModelPermissions(BasePermission):
     provide a `.queryset` attribute.
     """
 
-    # Map methods into required permission codes.
-    # Override this if you need to also provide 'view' permissions,
-    # or if you want to provide custom permission codes.
+    # Map HTTP methods to required Django model permission codes
+    # Format uses app_label and model_name string substitutions
+    # 结构说明：
+    # - 键：HTTP方法（大写）
+    # - 值：权限字符串列表，支持格式字符串替换
+    # 默认配置：
+    # - 写操作需要对应模型权限
+    # - 读操作不需要额外权限（空列表）
     perms_map = {
         'GET': [],
         'OPTIONS': [],
@@ -198,12 +203,23 @@ class DjangoModelPermissions(BasePermission):
         'DELETE': ['%(app_label)s.delete_%(model_name)s'],
     }
 
+    # 是否强制要求用户必须通过认证
+    # 当设置为True时，未认证用户直接返回无权限
     authenticated_users_only = True
 
     def get_required_permissions(self, method, model_cls):
         """
-        Given a model and an HTTP method, return the list of permission
-        codes that the user is required to have.
+        根据HTTP方法和数据模型类获取需要的权限列表
+
+        Parameters:
+        method -- HTTP请求方法（字符串，如'POST'）
+        model_cls -- Django模型类对象
+
+        Returns:
+        list -- 格式化后的完整权限字符串列表
+
+        Raises:
+        MethodNotAllowed -- 当传入不支持的HTTP方法时抛出
         """
         kwargs = {
             'app_label': model_cls._meta.app_label,
@@ -216,12 +232,26 @@ class DjangoModelPermissions(BasePermission):
         return [perm % kwargs for perm in self.perms_map[method]]
 
     def _queryset(self, view):
+        """
+        验证视图的查询集配置并返回有效查询集
+
+        Parameters:
+        view -- Django视图实例
+
+        Returns:
+        QuerySet -- 视图关联的模型查询集
+
+        Raises:
+        AssertionError -- 当视图未定义queryset或get_queryset方法时抛出
+        """
+        # 验证视图是否正确定义了查询集获取方式
         assert hasattr(view, 'get_queryset') \
             or getattr(view, 'queryset', None) is not None, (
             'Cannot apply {} on a view that does not set '
             '`.queryset` or have a `.get_queryset()` method.'
         ).format(self.__class__.__name__)
 
+        # 优先使用动态查询集获取方式
         if hasattr(view, 'get_queryset'):
             queryset = view.get_queryset()
             assert queryset is not None, (
@@ -231,18 +261,37 @@ class DjangoModelPermissions(BasePermission):
         return view.queryset
 
     def has_permission(self, request, view):
+        """
+        核心权限校验方法，判断请求是否具有访问权限
+
+        Parameters:
+        request -- HttpRequest对象，包含用户和请求信息
+        view -- Django视图实例
+
+        Returns:
+        bool -- True表示有权限，False表示无权限
+
+        处理逻辑：
+        1. 基础认证检查
+        2. 处理特殊标记的视图豁免权限检查
+        3. 获取模型类并生成所需权限列表
+        4. 验证用户是否拥有全部所需权限
+        """
+        # 认证用户检查（当authenticated_users_only=True时）
         if not request.user or (
            not request.user.is_authenticated and self.authenticated_users_only):
             return False
 
-        # Workaround to ensure DjangoModelPermissions are not applied
-        # to the root view when using DefaultRouter.
+        # 处理特殊豁免标记（如DefaultRouter的根视图）
         if getattr(view, '_ignore_model_permissions', False):
             return True
 
+        # 获取视图关联的模型类
         queryset = self._queryset(view)
+        # 生成当前请求方法需要的权限列表
         perms = self.get_required_permissions(request.method, queryset.model)
 
+        # 验证用户是否拥有所有需要的权限
         return request.user.has_perms(perms)
 
 
@@ -287,28 +336,45 @@ class DjangoObjectPermissions(DjangoModelPermissions):
         return [perm % kwargs for perm in self.perms_map[method]]
 
     def has_object_permission(self, request, view, obj):
+        """
+        检查请求用户是否对特定对象具有操作权限。
+
+        Args:
+            request (HttpRequest): 当前HTTP请求对象，包含用户、方法等信息。
+            view (View): 当前处理的Django视图实例，用于获取模型查询集。
+            obj (Model): 需要验证权限的目标对象实例。
+
+        Returns:
+            bool: 若用户具有权限返回True；否则返回False或抛出Http404异常。
+
+        Note:
+            该函数需在类级别权限校验(has_permission)通过后调用。
+        """
         # authentication checks have already executed via has_permission
         queryset = self._queryset(view)
         model_cls = queryset.model
         user = request.user
 
+        # 获取当前请求方法对应的对象级权限要求
         perms = self.get_required_object_permissions(request.method, model_cls)
 
+        # 核心权限校验逻辑：验证用户是否具备所有要求的权限
         if not user.has_perms(perms, obj):
-            # If the user does not have permissions we need to determine if
-            # they have read permissions to see 403, or not, and simply see
-            # a 404 response.
-
+            # 权限不足时的处理策略：
+            # 1. 安全方法（GET/HEAD/OPTIONS）直接返回404
+            # 2. 非安全方法需额外检查读权限来决定返回404或403
             if request.method in SAFE_METHODS:
-                # Read permissions already checked and failed, no need
-                # to make another lookup.
+                # 安全方法因读权限不足直接隐藏对象存在性
                 raise Http404
 
+            # 非安全方法需二次检查读权限
             read_perms = self.get_required_object_permissions('GET', model_cls)
             if not user.has_perms(read_perms, obj):
+                # 读权限也不存在时隐藏对象
                 raise Http404
 
-            # Has read permissions.
+            # 有读权限但无写权限时返回权限拒绝
             return False
 
         return True
+
