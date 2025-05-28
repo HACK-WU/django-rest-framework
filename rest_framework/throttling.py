@@ -49,15 +49,17 @@ class BaseThrottle:
 
 class SimpleRateThrottle(BaseThrottle):
     """
-    A simple cache implementation, that only requires `.get_cache_key()`
-    to be overridden.
+    基于缓存的简单限流实现，要求子类必须重写`.get_cache_key()`方法。
 
-    The rate (requests / seconds) is set by a `rate` attribute on the Throttle
-    class.  The attribute is a string of the form 'number_of_requests/period'.
+    属性:
+        cache (Cache): 使用的缓存实例，默认使用default_cache
+        timer (function): 时间戳获取函数，默认使用time.time
+        cache_format (str): 缓存键格式模板，包含%(scope)s和%(ident)s变量
+        scope (str | None): 限流作用域标识符
+        THROTTLE_RATES (dict): 存储各作用域对应限流速率的字典
 
-    Period should be one of: ('s', 'sec', 'm', 'min', 'h', 'hour', 'd', 'day')
-
-    Previous request information used for throttling is stored in the cache.
+    限流速率通过rate属性设置，格式为'number_of_requests/period'，
+    period支持单位：秒(s/sec)、分(m/min)、小时(h/hour)、天(d/day)
     """
     cache = default_cache
     timer = time.time
@@ -66,22 +68,41 @@ class SimpleRateThrottle(BaseThrottle):
     THROTTLE_RATES = api_settings.DEFAULT_THROTTLE_RATES
 
     def __init__(self):
+        """
+        初始化限流器，配置请求速率和时间窗口参数。
+
+        如果子类未定义rate属性，则通过get_rate()获取默认速率，
+        并解析为每秒请求数和时间窗口长度（秒）。
+        """
         if not getattr(self, 'rate', None):
             self.rate = self.get_rate()
         self.num_requests, self.duration = self.parse_rate(self.rate)
 
     def get_cache_key(self, request, view):
         """
-        Should return a unique cache-key which can be used for throttling.
-        Must be overridden.
+        生成用于限流的唯一缓存键。必须由子类重写。
 
-        May return `None` if the request should not be throttled.
+        参数:
+            request (HttpRequest): 当前请求对象
+            view (View): 处理请求的视图实例
+
+        返回:
+            str | None: 返回缓存键字符串，若不应限制则返回None
+
+        异常:
+            NotImplementedError: 如果子类未实现该方法
         """
         raise NotImplementedError('.get_cache_key() must be overridden')
 
     def get_rate(self):
         """
-        Determine the string representation of the allowed request rate.
+        获取当前作用域对应的默认请求速率配置。
+
+        返回:
+            str: 限流速率字符串（如'100/day'）
+
+        异常:
+            ImproperlyConfigured: 当未设置scope且找不到对应速率配置时抛出
         """
         if not getattr(self, 'scope', None):
             msg = ("You must set either `.scope` or `.rate` for '%s' throttle" %
@@ -94,24 +115,41 @@ class SimpleRateThrottle(BaseThrottle):
             msg = "No default throttle rate set for '%s' scope" % self.scope
             raise ImproperlyConfigured(msg)
 
+
     def parse_rate(self, rate):
         """
-        Given the request rate string, return a two tuple of:
-        <allowed number of requests>, <period of time in seconds>
+        将请求速率字符串解析为允许的请求数和时间周期。
+
+        参数:
+            rate (str): 请求速率字符串，格式为"<数量>/<周期>"，例如"5/m"表示每分钟5次请求。
+                        周期可选单位: s(秒), m(分钟), h(小时), d(天)
+
+        返回:
+            tuple: 包含两个元素的元组
+                  - num_requests (int): 允许的请求数量
+                  - duration (int): 时间周期对应的秒数
         """
         if rate is None:
             return (None, None)
         num, period = rate.split('/')
         num_requests = int(num)
+        # 将周期字符转换为对应的秒数
         duration = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[period[0]]
         return (num_requests, duration)
 
     def allow_request(self, request, view):
         """
-        Implement the check to see if the request should be throttled.
+        判断当前请求是否应该被限流。
 
-        On success calls `throttle_success`.
-        On failure calls `throttle_failure`.
+        参数:
+            request: 当前请求对象
+            view: 被访问的视图对象
+
+        返回:
+            bool: True表示允许请求，False表示需要限流
+
+        注意:
+            成功时调用throttle_success()，失败时调用throttle_failure()
         """
         if self.rate is None:
             return True
@@ -123,18 +161,22 @@ class SimpleRateThrottle(BaseThrottle):
         self.history = self.cache.get(self.key, [])
         self.now = self.timer()
 
-        # Drop any requests from the history which have now passed the
-        # throttle duration
+        # 清理历史记录中已过期的请求时间戳
         while self.history and self.history[-1] <= self.now - self.duration:
             self.history.pop()
+
+        # 检查当前请求数是否超过限制
         if len(self.history) >= self.num_requests:
             return self.throttle_failure()
         return self.throttle_success()
 
     def throttle_success(self):
         """
-        Inserts the current request's timestamp along with the key
-        into the cache.
+        处理请求成功通过限流的情况。
+
+        功能:
+            将当前请求时间戳插入历史记录首部，
+            并更新缓存中的请求历史记录
         """
         self.history.insert(0, self.now)
         self.cache.set(self.key, self.history, self.duration)
@@ -142,23 +184,33 @@ class SimpleRateThrottle(BaseThrottle):
 
     def throttle_failure(self):
         """
-        Called when a request to the API has failed due to throttling.
+        处理请求被限流的情况。
+
+        返回:
+            bool: 始终返回False表示请求被拒绝
         """
         return False
 
     def wait(self):
         """
-        Returns the recommended next request time in seconds.
+        计算推荐的下次请求等待时间。
+
+        返回:
+            float/None: 需要等待的秒数（保留小数），或None表示无可用请求配额
         """
         if self.history:
+            # 计算从最近一次请求开始的时间窗口剩余时间
             remaining_duration = self.duration - (self.now - self.history[-1])
         else:
+            # 如果没有历史记录，使用完整时间窗口
             remaining_duration = self.duration
 
+        # 计算剩余可用请求数
         available_requests = self.num_requests - len(self.history) + 1
         if available_requests <= 0:
             return None
 
+        # 返回单次请求应等待的平均时间
         return remaining_duration / float(available_requests)
 
 

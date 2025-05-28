@@ -268,9 +268,14 @@ class APISettings:
         return self._user_settings
 
     def __getattr__(self, attr):
+        """
+        当访问类实例中不存在的属性时触发该方法
+        """
+        # 属性合法性校验：仅允许获取预定义的默认配置项
         if attr not in self.defaults:
             raise AttributeError("Invalid API setting: '%s'" % attr)
 
+        # 配置获取策略：优先读取用户设置，回退到默认配置
         try:
             # Check if present in user settings
             val = self.user_settings[attr]
@@ -278,11 +283,11 @@ class APISettings:
             # Fall back to defaults
             val = self.defaults[attr]
 
-        # Coerce import strings into classes
+        # 动态加载处理：将配置中的导入字符串转换为实际类对象
         if attr in self.import_strings:
             val = perform_import(val, attr)
 
-        # Cache the result
+        # 属性缓存机制：避免重复计算，后续访问将直接读取实例属性
         self._cached_attrs.add(attr)
         setattr(self, attr, val)
         return val
