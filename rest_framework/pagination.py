@@ -196,29 +196,48 @@ class PageNumberPagination(BasePagination):
 
     def paginate_queryset(self, queryset, request, view=None):
         """
-        Paginate a queryset if required, either returning a
-        page object, or `None` if pagination is not configured for this view.
+        对查询集进行分页处理
+
+        参数:
+            queryset (QuerySet): 需要被分页的Django QuerySet对象
+            request (Request): 当前的HTTP请求对象
+            view (APIView, optional): 调用该方法的视图实例，默认为None
+            
+        返回值:
+            Page: 分页后的页面对象（当启用分页时）
+            None: 当未配置分页功能时
+            
+        功能流程:
+            1. 设置请求对象并获取分页大小
+            2. 创建分页器并获取当前页码
+            3. 处理无效页码异常
+            4. 配置分页控件显示状态
+            5. 返回分页后的数据列表
         """
         self.request = request
         page_size = self.get_page_size(request)
         if not page_size:
             return None
 
+        # 初始化分页器
         paginator = self.django_paginator_class(queryset, page_size)
         page_number = self.get_page_number(request, paginator)
 
         try:
+            # 获取当前分页对象
             self.page = paginator.page(page_number)
         except InvalidPage as exc:
+            # 处理无效页码异常
             msg = self.invalid_page_message.format(
                 page_number=page_number, message=str(exc)
             )
             raise NotFound(msg)
 
+        # 配置分页控件显示状态（当存在多页且模板可用时）
         if paginator.num_pages > 1 and self.template is not None:
-            # The browsable API should display pagination controls.
             self.display_page_controls = True
 
+        # 返回分页数据列表
         return list(self.page)
 
     def get_page_number(self, request, paginator):
